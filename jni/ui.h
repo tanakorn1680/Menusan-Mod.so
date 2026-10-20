@@ -94,6 +94,16 @@ static char g_dropInfo1[120] = "", g_dropInfo2[160] = "";                // what
 static bool g_dropKeep = false;                                          // test mode: make the pickup but keep the weapon
 static ScriptFn g_scriptFn = nullptr;
 static int (*g_getPedRef)(void*) = nullptr;                              // CPools::GetPedRef(ped)
+// SAUtils copies every output back with a 64-bit store (low 32 bits = the value, high 32 bits = 0), so each output
+// variable must be 8 bytes wide.  4-byte variables get their neighbour wiped, which is exactly what broke the first drop
+// (the "spot" came back with y = 0 and the pickup was created 1600 units away).
+struct ScriptOut {
+    unsigned long long raw;
+    ScriptOut() : raw(0) {}
+    int asInt() const { return (int)(unsigned int)raw; }
+    float asFloat() const { unsigned int b = (unsigned int)raw; float f; memcpy(&f, &b, 4); return f; }
+};
+static_assert(sizeof(ScriptOut) == 8, "script outputs must be 8 bytes");
 static const ScriptCmd kCmdOffset = {0x04C4, "ifffvvv"};                 // GET_OFFSET_FROM_CHAR_IN_WORLD_COORDS
 static const ScriptCmd kCmdModel  = {0x0781, "iv"};                      // GET_WEAPONTYPE_MODEL
 static const ScriptCmd kCmdPickup = {0x032B, "iiifffv"};                 // CREATE_PICKUP_WITH_AMMO
@@ -517,24 +527,34 @@ static void DoDropWeapon() {
     float me[3] = {0.f, 0.f, 0.f};
     EntityPos(ped, me);
 
-    float x = 0.f, y = 0.f, z = 0.f;
+    ScriptOut ox, oy, oz;
     Diag::Crumb("  step 1: spot in front");
-    g_scriptFn(g_sautils, &kCmdOffset, pedRef, 0.0, 3.0, 0.0, &x, &y, &z);
+    g_scriptFn(g_sautils, &kCmdOffset, pedRef, 0.0, 3.0, 0.0, &ox.raw, &oy.raw, &oz.raw);
+    const float x = ox.asFloat(), y = oy.asFloat(), z = oz.asFloat();
     snprintf(g_dropInfo2, sizeof(g_dropInfo2), "You %.0f %.0f %.0f   spot %.0f %.0f %.0f", me[0], me[1], me[2], x, y, z);
-    if (!Finite(x) || !Finite(y) || !Finite(z) || (x == 0.f && y == 0.f && z == 0.f)) {
-        Diag::Crumb("  bad spot, weapon kept"); snprintf(g_dropInfo1, sizeof(g_dropInfo1), "Step 1 failed: no spot in front"); return;
+    // Was: only rejected when x==y==z==0. Seen in practice: x comes back correct while y and/or z alone
+    // come back 0 (a bad script output), which slipped past that check and dropped the pickup far away.
+    // Any axis landing far from the player (should be ~3 units away) is now rejected too.
+    const float dx = x - me[0], dy = y - me[1], dz = z - me[2];
+    const float distSq = dx * dx + dy * dy + dz * dz;
+    if (!Finite(x) || !Finite(y) || !Finite(z) || (x == 0.f && y == 0.f && z == 0.f) || distSq > 2500.f /* 50 units */) {
+        Diag::Crumb("  bad spot %.0f %.0f %.0f vs you %.0f %.0f %.0f, weapon kept", x, y, z, me[0], me[1], me[2]);
+        snprintf(g_dropInfo1, sizeof(g_dropInfo1), "Step 1 failed: no spot in front"); return;
     }
 
-    int model = 0;
+    ScriptOut om;
     Diag::Crumb("  step 2: weapon model");
-    g_scriptFn(g_sautils, &kCmdModel, type, &model);
+    g_scriptFn(g_sautils, &kCmdModel, type, &om.raw);
+    const int model = om.asInt();
     if (model <= 0 || model >= 20000) {
         Diag::Crumb("  bad model %d, weapon kept", model); snprintf(g_dropInfo1, sizeof(g_dropInfo1), "Step 2 failed: weapon %d has model %d", type, model); return;
     }
 
-    int handle = -1;
+    ScriptOut oh;
+    oh.raw = 0xFFFFFFFFull;                                              // -1 until the command writes the handle
     Diag::Crumb("  step 3: create pickup (model %d) at %.1f %.1f %.1f", model, x, y, z);
-    g_scriptFn(g_sautils, &kCmdPickup, model, 3, ammo, (double)x, (double)y, (double)z, &handle);
+    g_scriptFn(g_sautils, &kCmdPickup, model, 3, ammo, (double)x, (double)y, (double)z, &oh.raw);
+    const int handle = oh.asInt();
     snprintf(g_dropInfo1, sizeof(g_dropInfo1), "Weapon %d, model %d, ammo %d, pickup handle %d", type, model, ammo, handle);
     if (handle == -1 || handle == 0) { Diag::Crumb("  pickup failed (handle %d), weapon kept", handle); Toast(Tr("Could not drop here")); return; }
 
@@ -1601,7 +1621,7 @@ static void PageMenu() {
     ImGui::Spacing();
 
     ImGui::TextColored(hdr, "%s", Tr("About"));
-    ImGui::TextColored(dim, "ProMenu 0.9.3");
+    ImGui::TextColored(dim, "ProMenu 0.9.4");
     ImGui::TextColored(dim, "Radar table: %s", g_radarLayout);
     ImGui::TextColored(dim, Tr("Game state: %d    Game symbols: %d/%d"), g_dbgGameState, g_dbgFound, g_symTotal);
     ImGui::TextColored(dim, Tr("Cheat tables: %s"), CheatTablesOk() ? Tr("found") : Tr("missing"));
