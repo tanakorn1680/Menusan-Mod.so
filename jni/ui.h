@@ -74,12 +74,6 @@ static void (*g_bikeTeleport)(void*, Vec3*, unsigned char) = nullptr;  // CBike:
 static void (*g_autoTeleport)(void*, Vec3*, unsigned char) = nullptr;  // CAutomobile::Teleport
 static void (*g_bikePlace)(void*) = nullptr;                        // CBike::PlaceOnRoadProperly
 static void (*g_autoPlace)(void*) = nullptr;                        // CAutomobile::PlaceOnRoadProperly
-// vehicle fix: confirmed from the original menu's own import table (one symbol per vehicle class, not virtual)
-static void (*g_autoFix)(void*) = nullptr;                          // CAutomobile::Fix
-static void (*g_bikeFix)(void*) = nullptr;                          // CBike::Fix
-static void (*g_heliFix)(void*) = nullptr;                          // CHeli::Fix
-static void (*g_planeFix)(void*) = nullptr;                         // CPlane::Fix
-static void (*g_quadFix)(void*) = nullptr;                          // CQuadBike::Fix
 static float (*g_groundZ)(float, float) = nullptr;                  // CWorld::FindGroundZForCoord
 static void (*g_loadSceneCol)(const Vec3*) = nullptr;               // CStreaming::LoadSceneCollision
 static void (*g_loadScene)(const Vec3*) = nullptr;                  // CStreaming::LoadScene
@@ -97,6 +91,7 @@ struct ScriptCmd { unsigned short opcode; char params[16]; };            // 18 b
 typedef void (*ScriptFn)(void* self, const ScriptCmd* cmd, ...);        // SAUtils::ScriptCommand(const SCRIPT_COMMAND*, ...)
 static void* g_sautils = nullptr;                                        // the "SAUtils" interface object (set by main.cpp)
 static char g_dropInfo1[120] = "", g_dropInfo2[160] = "";                // what the last drop did (shown under the buttons)
+static bool g_dropKeep = false;                                          // test mode: make the pickup but keep the weapon
 static ScriptFn g_scriptFn = nullptr;
 static int (*g_getPedRef)(void*) = nullptr;                              // CPools::GetPedRef(ped)
 // SAUtils copies every output back with a 64-bit store (low 32 bits = the value, high 32 bits = 0), so each output
@@ -114,6 +109,12 @@ static const ScriptCmd kCmdModel  = {0x0781, "iv"};                      // GET_
 static const ScriptCmd kCmdPickup = {0x032B, "iiifffv"};                 // CREATE_PICKUP_WITH_AMMO
 static const ScriptCmd kCmdRemove = {0x0555, "ii"};                      // REMOVE_WEAPON_FROM_CHAR
 static void (*g_requestModel)(int, int) = nullptr;                      // CStreaming::RequestModel(model, flags)
+// vehicle repair (one function per vehicle class; all five imported by the ARM menu)
+static void (*g_fixAuto)(void*) = nullptr;     // CAutomobile::Fix
+static void (*g_fixBike)(void*) = nullptr;     // CBike::Fix
+static void (*g_fixQuad)(void*) = nullptr;     // CQuadBike::Fix
+static void (*g_fixHeli)(void*) = nullptr;     // CHeli::Fix
+static void (*g_fixPlane)(void*) = nullptr;    // CPlane::Fix
 // visual switches: single-byte game flags, read and written directly like the original menu does
 struct VisDef { const char* label; const char* sym; bool invert; int group; };
 static const VisDef kVis[] = {
@@ -171,11 +172,6 @@ static int ResolveGame(uintptr_t (*lookup)(const char*)) {
     Res(lookup, g_autoTeleport, "_ZN11CAutomobile8TeleportE7CVectorh", found);
     Res(lookup, g_bikePlace, "_ZN5CBike19PlaceOnRoadProperlyEv", found);
     Res(lookup, g_autoPlace, "_ZN11CAutomobile19PlaceOnRoadProperlyEv", found);
-    Res(lookup, g_autoFix, "_ZN11CAutomobile3FixEv", found);
-    Res(lookup, g_bikeFix, "_ZN5CBike3FixEv", found);
-    Res(lookup, g_heliFix, "_ZN5CHeli3FixEv", found);
-    Res(lookup, g_planeFix, "_ZN6CPlane3FixEv", found);
-    Res(lookup, g_quadFix, "_ZN9CQuadBike3FixEv", found);
     Res(lookup, g_groundZ, "_ZN6CWorld19FindGroundZForCoordEff", found);
     Res(lookup, g_loadSceneCol, "_ZN10CStreaming18LoadSceneCollisionEPK7CVector", found);
     Res(lookup, g_loadScene, "_ZN10CStreaming9LoadSceneEPK7CVector", found);
@@ -189,6 +185,11 @@ static int ResolveGame(uintptr_t (*lookup)(const char*)) {
     Res(lookup, g_requestModel, "_ZN10CStreaming12RequestModelEii", found);
     Res(lookup, g_clearWeapon, "_ZN4CPed11ClearWeaponE11eWeaponType", found);
     Res(lookup, g_getPedRef, "_ZN6CPools9GetPedRefEP4CPed", found);
+    Res(lookup, g_fixAuto, "_ZN11CAutomobile3FixEv", found);
+    Res(lookup, g_fixBike, "_ZN5CBike3FixEv", found);
+    Res(lookup, g_fixQuad, "_ZN9CQuadBike3FixEv", found);
+    Res(lookup, g_fixHeli, "_ZN5CHeli3FixEv", found);
+    Res(lookup, g_fixPlane, "_ZN6CPlane3FixEv", found);
     for (int i = 0; i < kNumVis; i++) { g_symTotal++; g_visPtr[i] = (unsigned char*)lookup(kVis[i].sym); if (g_visPtr[i]) found++; }
     Res(lookup, g_pTimeScale, "_ZN6CTimer13ms_fTimeScaleE", found);
     Res(lookup, g_pClockH, "_ZN6CClock18ms_nGameClockHoursE", found);
@@ -258,26 +259,6 @@ static bool PlayerPos(float* out) {
     char* veh = g_findPlayerVehicle ? (char*)g_findPlayerVehicle(-1, true) : nullptr;
     if (veh && EntityPos(veh, out)) return true;
     return EntityPos(ped, out);
-}
-
-// Fix the vehicle the player is in. Unlike Teleport, the original menu calls one symbol per
-// vehicle class directly (no virtual dispatch), so this reads the same type/class fields and picks
-// the matching Fix function the same way the Teleport fallback already does.
-static void DoFixVehicle() {
-    char* veh = g_findPlayerVehicle ? (char*)g_findPlayerVehicle(-1, true) : nullptr;
-    if (!veh) { Toast(Tr("Get in a vehicle first")); return; }
-    int cls = 0; SafeMem::Get(veh, 0x738, cls);
-    int type = -1; SafeMem::Get(veh, 0x734, type);
-    void (*fn)(void*) = nullptr; const char* kind = "auto";
-    if (cls == 3 && g_heliFix) { fn = g_heliFix; kind = "heli"; }
-    else if (cls == 4 && g_planeFix) { fn = g_planeFix; kind = "plane"; }
-    else if ((type == 9 || type == 10) && g_bikeFix) { fn = g_bikeFix; kind = "bike"; }
-    else if (type == 2 && g_quadFix) { fn = g_quadFix; kind = "quad"; }
-    else if (g_autoFix) { fn = g_autoFix; kind = "auto"; }
-    if (!fn) { Diag::Crumb("fix refused: unsupported vehicle (type %d class %d)", type, cls); Toast(Tr("Can't fix this vehicle")); return; }
-    Diag::Crumb("fix vehicle (%s)", kind);
-    fn(veh);
-    Toast(Tr("Vehicle fixed"));
 }
 
 // ---- the map waypoint (radar blip sprite 41) -------------------------------------------------
@@ -562,14 +543,8 @@ static void DoDropWeapon() {
     g_scriptFn(g_sautils, &kCmdOffset, pedRef, 0.0, 3.0, 0.0, &ox.raw, &oy.raw, &oz.raw);
     const float x = ox.asFloat(), y = oy.asFloat(), z = oz.asFloat();
     snprintf(g_dropInfo2, sizeof(g_dropInfo2), "You %.0f %.0f %.0f   spot %.0f %.0f %.0f", me[0], me[1], me[2], x, y, z);
-    // Was: only rejected when x==y==z==0. Seen in practice: x comes back correct while y and/or z alone
-    // come back 0 (a bad script output), which slipped past that check and dropped the pickup far away.
-    // Any axis landing far from the player (should be ~3 units away) is now rejected too.
-    const float dx = x - me[0], dy = y - me[1], dz = z - me[2];
-    const float distSq = dx * dx + dy * dy + dz * dz;
-    if (!Finite(x) || !Finite(y) || !Finite(z) || (x == 0.f && y == 0.f && z == 0.f) || distSq > 2500.f /* 50 units */) {
-        Diag::Crumb("  bad spot %.0f %.0f %.0f vs you %.0f %.0f %.0f, weapon kept", x, y, z, me[0], me[1], me[2]);
-        snprintf(g_dropInfo1, sizeof(g_dropInfo1), "Step 1 failed: no spot in front"); return;
+    if (!Finite(x) || !Finite(y) || !Finite(z) || (x == 0.f && y == 0.f && z == 0.f)) {
+        Diag::Crumb("  bad spot, weapon kept"); snprintf(g_dropInfo1, sizeof(g_dropInfo1), "Step 1 failed: no spot in front"); return;
     }
 
     ScriptOut om;
@@ -588,15 +563,42 @@ static void DoDropWeapon() {
     snprintf(g_dropInfo1, sizeof(g_dropInfo1), "Weapon %d, model %d, ammo %d, pickup handle %d", type, model, ammo, handle);
     if (handle == -1 || handle == 0) { Diag::Crumb("  pickup failed (handle %d), weapon kept", handle); Toast(Tr("Could not drop here")); return; }
 
+    if (g_dropKeep) { Diag::Crumb("  test mode: weapon kept (pickup handle %d)", handle); Toast(Tr("Pickup created (weapon kept)")); return; }
     Diag::Crumb("  step 4: take weapon (pickup handle %d)", handle);
     g_scriptFn(g_sautils, &kCmdRemove, pedRef, type);
     Diag::Crumb("  done");
     Toast(Tr("Weapon dropped"));
 }
 
+// ============================================================ vehicle repair
+// Vehicle type (int at +0x734): 0 car, 1 monster truck, 2 quad, 3 heli, 4 plane, 5 boat, 6 train, 7/8 flying heli/plane, 9 bike, 10 bmx, 11 trailer.
+// The ARM menu imports one Fix() per class; boats, trains and BMX have none, so they are refused instead of guessed.
+static void DoFixVehicle() {
+    char* ped = PlayerPed();
+    if (!ped) return;
+    char* veh = g_findPlayerVehicle ? (char*)g_findPlayerVehicle(-1, true) : nullptr;
+    if (!veh) { Toast(Tr("Get in a vehicle first")); return; }
+    int type = -1;
+    if (!SafeMem::Get(veh, 0x734, type)) { Diag::Crumb("fix vehicle: type unreadable"); return; }
+    void (*fn)(void*) = nullptr;
+    switch (type) {
+        case 0: case 1: case 11: fn = g_fixAuto; break;
+        case 2: fn = g_fixQuad; break;
+        case 3: fn = g_fixHeli; break;
+        case 4: fn = g_fixPlane; break;
+        case 9: fn = g_fixBike; break;
+        default: break;
+    }
+    if (!fn) { Diag::Crumb("fix vehicle: no repair function for type %d", type); Toast(Tr("This vehicle cannot be repaired")); return; }
+    Diag::Crumb("fix vehicle type %d", type);
+    fn(veh);
+    Diag::Crumb("  done");
+    Toast(Tr("Vehicle fixed"));
+}
+
 // ============================================================ action queue
 // The UI never touches the game directly; it queues actions that run inside the game's update tick.
-enum { aCheat = 0, aVehicle, aClock, aWanted, aHealth, aArmour, aMoney, aTimeScale, aClockHM, aDay, aDayLen, aWeather, aTopDown, aTopZoom, aTeleport, aGiveWeapon, aClearWeapons, aFlag, aDropWeapon, aRemoveCurrent };
+enum { aCheat = 0, aVehicle, aClock, aWanted, aHealth, aArmour, aMoney, aTimeScale, aClockHM, aDay, aDayLen, aWeather, aTopDown, aTopZoom, aTeleport, aGiveWeapon, aClearWeapons, aFlag, aDropWeapon, aRemoveCurrent, aFixVehicle };
 struct Act { int kind; int i; float f; float g; };
 static const int kQueueSize = 32;
 static Act g_queue[kQueueSize];
@@ -685,6 +687,7 @@ static void RunQueued(bool gameIsRunning) {
             case aClearWeapons: DoRemoveWeapons(); break;
             case aDropWeapon: DoDropWeapon(); break;
             case aRemoveCurrent: DoRemoveCurrent(); break;
+            case aFixVehicle: DoFixVehicle(); break;
             case aFlag: if (a.i >= 0 && a.i < kNumVis && g_visPtr[a.i]) *g_visPtr[a.i] = (a.f != 0.f) ? 1 : 0; break;
             case aTeleport:
                 DoTeleport(a.f, a.g);
@@ -930,8 +933,9 @@ static const TrPair kTr[] = {
     {"Top left", "บนซ้าย"}, {"Top center", "บนกลาง"}, {"Top right", "บนขวา"}, {"Bottom left", "ล่างซ้าย"}, {"Bottom right", "ล่างขวา"},
     {"Text color", "สีตัวอักษร"}, {"White", "ขาว"}, {"Yellow", "เหลือง"}, {"Green", "เขียว"}, {"Cyan", "ฟ้า"}, {"Pink", "ชมพู"}, {"Orange", "ส้ม"},
     {"Playtime", "เวลาเล่น"},
+    {"Fix vehicle", "ซ่อมรถ"}, {"Get in a vehicle first", "ขึ้นรถก่อน"}, {"Vehicle fixed", "ซ่อมรถแล้ว"}, {"This vehicle cannot be repaired", "ซ่อมรถคันนี้ไม่ได้"},
     {"Drop current weapon", "ทิ้งอาวุธที่ถืออยู่"}, {"Remove current weapon", "ถอดอาวุธที่ถืออยู่"}, {"You have no weapons", "ยังไม่มีอาวุธ"},
-    {"Weapon dropped", "ทิ้งอาวุธแล้ว"}, {"Drop needs the SAUtils mod", "การทิ้งอาวุธต้องใช้ม็อด SAUtils"}, {"Could not drop here", "ทิ้งตรงนี้ไม่ได้"},
+    {"Weapon dropped", "ทิ้งอาวุธแล้ว"}, {"Drop needs the SAUtils mod", "การทิ้งอาวุธต้องใช้ม็อด SAUtils"}, {"Could not drop here", "ทิ้งตรงนี้ไม่ได้"}, {"Test: keep weapon when dropping", "ทดสอบ: สร้างของเก็บแต่ไม่ถอดอาวุธ"}, {"Pickup created (weapon kept)", "สร้างของเก็บแล้ว (ยังถืออาวุธอยู่)"},
     {"Get out of the vehicle first", "ลงจากรถก่อน"},
     {"Weapon", "อาวุธ"}, {"Visual", "ภาพ"}, {"Ammo", "กระสุน"}, {"Remove all weapons", "ถอดอาวุธทั้งหมด"}, {"Weapon given", "ให้อาวุธแล้ว"},
     {"Melee", "อาวุธระยะประชิด"}, {"Handguns", "ปืนพก"}, {"Shotguns", "ปืนลูกซอง"}, {"Submachine guns", "ปืนกลมือ"}, {"Rifles", "ปืนยาว"},
@@ -954,7 +958,6 @@ static const TrPair kTr[] = {
     {"No waypoint on the map", "ยังไม่ได้ปักจุดหมายบนแผนที่"}, {"Teleport to waypoint", "วาร์ปไปจุดหมาย"},
     {"Teleport underwater", "วาร์ปลงใต้น้ำ"}, {"Teleporting...", "กำลังวาร์ป..."},
     {"Can't teleport in this vehicle", "วาร์ปในยานพาหนะนี้ไม่ได้ (ลงจากรถก่อน)"},
-    {"Fix current vehicle", "ซ่อมยานพาหนะ"}, {"Get in a vehicle first", "ขึ้นยานพาหนะก่อน"}, {"Can't fix this vehicle", "ซ่อมยานพาหนะนี้ไม่ได้"}, {"Vehicle fixed", "ซ่อมแล้ว"},
     {"Coordinates", "พิกัด"}, {"Use current position", "ใช้ตำแหน่งปัจจุบัน"}, {"Places", "สถานที่"},
     {"My spots", "จุดของฉัน"}, {"Empty", "ว่าง"}, {"Save here", "บันทึกตรงนี้"},
     {"Grove Street", "ถนนโกรฟ"}, {"Los Santos Airport", "สนามบินลอสซานโตส"}, {"Santa Maria Beach", "หาดซานตามาเรีย"},
@@ -1276,13 +1279,10 @@ static void PagePlayer() {
 
 static void PageVehicle() {
     const float sc = g_sc;
-    if (Btn(Tr("Fix current vehicle"), ImVec2(RowWidth(), 96.f * sc), 1999, kBtnCol,
-            g_canRun && (g_autoFix || g_bikeFix || g_heliFix || g_planeFix || g_quadFix))) {
-        DoFixVehicle();
-    }
-    ImGui::Spacing();
     const float sp = ImGui::GetStyle().ItemSpacing.x;
     const float colW = (RowWidth() - sp * 2.f) / 3.f;
+    if (Btn(Tr("Fix vehicle"), ImVec2(RowWidth(), 96.f * sc), 1400, kBtnCol, g_canRun && g_findPlayerVehicle != nullptr)) Enqueue(aFixVehicle, 0);
+    ImGui::Spacing();
     const char* lastSec = nullptr;
     int secIdx = -1, n = 0;
     bool open = true;
@@ -1517,6 +1517,8 @@ static void PageWeapon() {
     ImGui::SameLine();
     if (Btn(Tr("Remove current weapon"), ImVec2(hw, 96.f * sc), 1212, kBtnCol, g_canRun && g_clearWeapon != nullptr)) Enqueue(aRemoveCurrent, 0);
     if (!haveDrop) ImGui::TextColored(ImVec4(0.55f, 0.60f, 0.70f, 1), "%s", Tr("Drop needs the SAUtils mod"));
+    if (ToggleRow(Tr("Test: keep weapon when dropping"), 1213, g_dropKeep, haveDrop)) g_dropKeep = !g_dropKeep;
+    if (g_dropInfo1[0]) { ImGui::TextColored(ImVec4(0.55f, 0.60f, 0.70f, 1), "%s", g_dropInfo1); ImGui::TextColored(ImVec4(0.55f, 0.60f, 0.70f, 1), "%s", g_dropInfo2); }
     const bool armed = g_clearArmT > 0.f;
     if (Btn(armed ? Tr("TAP AGAIN") : Tr("Remove all weapons"), ImVec2(RowWidth(), 96.f * sc), 1210, armed ? IM_COLOR_ARMED : kDangerCol, g_canRun && (g_clearWeapon != nullptr || g_clearWeapons != nullptr))) {
         if (armed) { g_clearArmT = 0.f; Enqueue(aClearWeapons, 0); }
@@ -1654,7 +1656,7 @@ static void PageMenu() {
     ImGui::Spacing();
 
     ImGui::TextColored(hdr, "%s", Tr("About"));
-    ImGui::TextColored(dim, "ProMenu 0.9.4");
+    ImGui::TextColored(dim, "ProMenu 0.9.5");
     ImGui::TextColored(dim, "Radar table: %s", g_radarLayout);
     ImGui::TextColored(dim, Tr("Game state: %d    Game symbols: %d/%d"), g_dbgGameState, g_dbgFound, g_symTotal);
     ImGui::TextColored(dim, Tr("Cheat tables: %s"), CheatTablesOk() ? Tr("found") : Tr("missing"));
