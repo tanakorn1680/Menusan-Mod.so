@@ -74,6 +74,12 @@ static void (*g_bikeTeleport)(void*, Vec3*, unsigned char) = nullptr;  // CBike:
 static void (*g_autoTeleport)(void*, Vec3*, unsigned char) = nullptr;  // CAutomobile::Teleport
 static void (*g_bikePlace)(void*) = nullptr;                        // CBike::PlaceOnRoadProperly
 static void (*g_autoPlace)(void*) = nullptr;                        // CAutomobile::PlaceOnRoadProperly
+// vehicle fix: confirmed from the original menu's own import table (one symbol per vehicle class, not virtual)
+static void (*g_autoFix)(void*) = nullptr;                          // CAutomobile::Fix
+static void (*g_bikeFix)(void*) = nullptr;                          // CBike::Fix
+static void (*g_heliFix)(void*) = nullptr;                          // CHeli::Fix
+static void (*g_planeFix)(void*) = nullptr;                         // CPlane::Fix
+static void (*g_quadFix)(void*) = nullptr;                          // CQuadBike::Fix
 static float (*g_groundZ)(float, float) = nullptr;                  // CWorld::FindGroundZForCoord
 static void (*g_loadSceneCol)(const Vec3*) = nullptr;               // CStreaming::LoadSceneCollision
 static void (*g_loadScene)(const Vec3*) = nullptr;                  // CStreaming::LoadScene
@@ -165,6 +171,11 @@ static int ResolveGame(uintptr_t (*lookup)(const char*)) {
     Res(lookup, g_autoTeleport, "_ZN11CAutomobile8TeleportE7CVectorh", found);
     Res(lookup, g_bikePlace, "_ZN5CBike19PlaceOnRoadProperlyEv", found);
     Res(lookup, g_autoPlace, "_ZN11CAutomobile19PlaceOnRoadProperlyEv", found);
+    Res(lookup, g_autoFix, "_ZN11CAutomobile3FixEv", found);
+    Res(lookup, g_bikeFix, "_ZN5CBike3FixEv", found);
+    Res(lookup, g_heliFix, "_ZN5CHeli3FixEv", found);
+    Res(lookup, g_planeFix, "_ZN6CPlane3FixEv", found);
+    Res(lookup, g_quadFix, "_ZN9CQuadBike3FixEv", found);
     Res(lookup, g_groundZ, "_ZN6CWorld19FindGroundZForCoordEff", found);
     Res(lookup, g_loadSceneCol, "_ZN10CStreaming18LoadSceneCollisionEPK7CVector", found);
     Res(lookup, g_loadScene, "_ZN10CStreaming9LoadSceneEPK7CVector", found);
@@ -247,6 +258,26 @@ static bool PlayerPos(float* out) {
     char* veh = g_findPlayerVehicle ? (char*)g_findPlayerVehicle(-1, true) : nullptr;
     if (veh && EntityPos(veh, out)) return true;
     return EntityPos(ped, out);
+}
+
+// Fix the vehicle the player is in. Unlike Teleport, the original menu calls one symbol per
+// vehicle class directly (no virtual dispatch), so this reads the same type/class fields and picks
+// the matching Fix function the same way the Teleport fallback already does.
+static void DoFixVehicle() {
+    char* veh = g_findPlayerVehicle ? (char*)g_findPlayerVehicle(-1, true) : nullptr;
+    if (!veh) { Toast(Tr("Get in a vehicle first")); return; }
+    int cls = 0; SafeMem::Get(veh, 0x738, cls);
+    int type = -1; SafeMem::Get(veh, 0x734, type);
+    void (*fn)(void*) = nullptr; const char* kind = "auto";
+    if (cls == 3 && g_heliFix) { fn = g_heliFix; kind = "heli"; }
+    else if (cls == 4 && g_planeFix) { fn = g_planeFix; kind = "plane"; }
+    else if ((type == 9 || type == 10) && g_bikeFix) { fn = g_bikeFix; kind = "bike"; }
+    else if (type == 2 && g_quadFix) { fn = g_quadFix; kind = "quad"; }
+    else if (g_autoFix) { fn = g_autoFix; kind = "auto"; }
+    if (!fn) { Diag::Crumb("fix refused: unsupported vehicle (type %d class %d)", type, cls); Toast(Tr("Can't fix this vehicle")); return; }
+    Diag::Crumb("fix vehicle (%s)", kind);
+    fn(veh);
+    Toast(Tr("Vehicle fixed"));
 }
 
 // ---- the map waypoint (radar blip sprite 41) -------------------------------------------------
@@ -923,6 +954,7 @@ static const TrPair kTr[] = {
     {"No waypoint on the map", "ยังไม่ได้ปักจุดหมายบนแผนที่"}, {"Teleport to waypoint", "วาร์ปไปจุดหมาย"},
     {"Teleport underwater", "วาร์ปลงใต้น้ำ"}, {"Teleporting...", "กำลังวาร์ป..."},
     {"Can't teleport in this vehicle", "วาร์ปในยานพาหนะนี้ไม่ได้ (ลงจากรถก่อน)"},
+    {"Fix current vehicle", "ซ่อมยานพาหนะ"}, {"Get in a vehicle first", "ขึ้นยานพาหนะก่อน"}, {"Can't fix this vehicle", "ซ่อมยานพาหนะนี้ไม่ได้"}, {"Vehicle fixed", "ซ่อมแล้ว"},
     {"Coordinates", "พิกัด"}, {"Use current position", "ใช้ตำแหน่งปัจจุบัน"}, {"Places", "สถานที่"},
     {"My spots", "จุดของฉัน"}, {"Empty", "ว่าง"}, {"Save here", "บันทึกตรงนี้"},
     {"Grove Street", "ถนนโกรฟ"}, {"Los Santos Airport", "สนามบินลอสซานโตส"}, {"Santa Maria Beach", "หาดซานตามาเรีย"},
@@ -1244,6 +1276,11 @@ static void PagePlayer() {
 
 static void PageVehicle() {
     const float sc = g_sc;
+    if (Btn(Tr("Fix current vehicle"), ImVec2(RowWidth(), 96.f * sc), 1999, kBtnCol,
+            g_canRun && (g_autoFix || g_bikeFix || g_heliFix || g_planeFix || g_quadFix))) {
+        DoFixVehicle();
+    }
+    ImGui::Spacing();
     const float sp = ImGui::GetStyle().ItemSpacing.x;
     const float colW = (RowWidth() - sp * 2.f) / 3.f;
     const char* lastSec = nullptr;
