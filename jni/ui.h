@@ -66,6 +66,12 @@ static void (*g_flipCar)(void*) = nullptr;          // Util::FlipCar(CVehicle*)
 static float* g_pCarDensity = nullptr;              // CCarCtrl::CarDensityMultiplier
 static bool* g_pVehAsDriver = nullptr;              // VehiclePage::ms_bAsDriver
 static bool* g_pVehInAir = nullptr;                 // VehiclePage::ms_bInAir
+// UI-side state for the Spawn Vehicle section (declared here, not down with the rest of the UI
+// state block, because the action queue's aVehicle case below needs to read g_spawnAsDriver /
+// g_spawnInAir - this is a single-pass header, so the declaration has to come before that use).
+static float g_densityCache = 1.f;                 // Vehicle > Density Multiplier, last value read from the game
+static bool g_spawnAsDriver = false, g_spawnInAir = false;   // Vehicle > Spawn Vehicle > As driver / In air
+static char g_spawnModelId[8] = "";                           // Vehicle > Spawn Vehicle > Vehicle model ID text entry
 // NOTE on As driver / In Air: the original menu's own "Spawn" button sets these two bools, THEN
 // calls its spawn routine, which (same as every other spawn button in that menu) ultimately goes
 // through CCheat::VehicleCheat(model) - the exact function this project's spawn grid already calls
@@ -743,9 +749,6 @@ static bool g_ovFps = false, g_ovCoords = false, g_ovPlay = false, g_ovNoBg = fa
 static int g_ovPos = 1, g_ovColor = 0;            // position 0..4 (TL, TC, TR, BL, BR), colour 0..5
 static float g_fps = 60.f, g_playSec = 0.f, g_ovHue = 0.f;
 static int g_tab = kTabCheats, g_lastTab = -1;
-static float g_densityCache = 1.f;                 // Vehicle > Density Multiplier, last value read from the game
-static bool g_spawnAsDriver = false, g_spawnInAir = false;   // Vehicle > Spawn Vehicle > As driver / In air
-static char g_spawnModelId[8] = "";                           // Vehicle > Spawn Vehicle > Vehicle model ID text entry
 static char g_toast[80] = "";
 static float g_toastT = 0.f;
 static bool g_expanded[64];                       // section expand/collapse state (cheat groups 0..11, vehicle sections 20..)
@@ -1111,6 +1114,14 @@ static bool Header(const char* label, int count, int id, bool expanded) {
 
 static float RowWidth() { return ImGui::GetContentRegionAvail().x - ImGui::GetStyle().ScrollbarSize - 4.f * g_sc; }
 
+// Moved up from its original spot (just before PageGame) so PageVehicle, which comes earlier in
+// the file, can call it too - this is a single-pass header, so a free function has to be
+// declared/defined before the first place that calls it.
+static bool Section(const char* label, int expIdx, int id) {
+    if (Header(label, 0, id, g_expanded[expIdx])) g_expanded[expIdx] = !g_expanded[expIdx];
+    return g_expanded[expIdx];
+}
+
 // value editor:  [--] [-] [ value ] [+] [++]  and a row of preset buttons.
 // returns: -2 / -1 / +1 / +2 for the step buttons, 10 + k for preset k, 0 for nothing
 static int Stepper(const char* title, int idBase, const char* value, const char* small, const char* big,
@@ -1431,11 +1442,6 @@ static int ChipRow(const char* const* labels, int n, int idBase, int selected, b
         if (Btn(labels[k], ImVec2(w, 92.f * g_sc), idBase + k, k == selected ? kAccentCol : kBtnCol, enabled)) r = k;
     }
     return r;
-}
-
-static bool Section(const char* label, int expIdx, int id) {
-    if (Header(label, 0, id, g_expanded[expIdx])) g_expanded[expIdx] = !g_expanded[expIdx];
-    return g_expanded[expIdx];
 }
 
 static void PageGame() {

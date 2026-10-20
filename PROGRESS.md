@@ -3,6 +3,32 @@
 Read this first. Written for the next AI session picking this up, so it does not have to
 rediscover any of this from scratch.
 
+## Build status: fixed after one failed CI run
+
+The first version of this patch (0.10 as originally sent) **failed to compile** — GitHub
+Actions run #24, `ndk-build`, 5 errors, all ordering bugs: `g_spawnAsDriver` / `g_spawnInAir`
+used inside the `aVehicle` case of the action-queue switch before they were declared further
+down the file, and `Section()` called from the new `PageVehicle()` before `Section()`'s own
+definition (which originally sat just above `PageGame()`, later in the file). `ui.h` is a
+single translation unit built top-to-bottom with no header/forward-declarations for its own
+free functions, so every helper has to be defined before its first caller — this file's own
+existing code already relies on that (e.g. `Header()` is defined before `PageVehicle` uses it);
+the new code just didn't follow it in two places.
+
+**This has been fixed** in this version: `g_spawnAsDriver` / `g_spawnInAir` / `g_spawnModelId` /
+`g_densityCache` moved up next to the other new `g_pVehAsDriver` / `g_pVehInAir` globals (right
+after the comment block explaining why `SpawnVehicle(std::string)` isn't called directly), and
+`Section()` moved up to right after `RowWidth()`, before `PageVehicle()`. Nothing about *what*
+the code does changed, only *where* in the file it's defined. If a future session needs to
+add more free functions to this file: **define them before their first caller**, not just
+"near the related code" — grep for the function/variable name's first match and confirm it's
+the definition, not a call, same check this session ran to catch the above.
+
+No other issues were found in the rest of the build log (`0_build.txt`,
+`build/1_Set up job.txt` etc. — the other steps, checkout/header-fetch, all passed; only the
+ndk-build step failed). This fix has not been run through CI again yet — next push's Actions
+run should confirm it actually builds clean.
+
 ## What this session was asked to do
 
 Port a specific list of Vehicle-tab features from the original ARM CheatMenu (binary plugin,
