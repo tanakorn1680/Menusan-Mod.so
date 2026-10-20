@@ -1480,7 +1480,6 @@ static void PageWeapon() {
     ImGui::SameLine();
     if (Btn(Tr("Remove current weapon"), ImVec2(hw, 96.f * sc), 1212, kBtnCol, g_canRun && g_clearWeapon != nullptr)) Enqueue(aRemoveCurrent, 0);
     if (!haveDrop) ImGui::TextColored(ImVec4(0.55f, 0.60f, 0.70f, 1), "%s", Tr("Drop needs the SAUtils mod"));
-    if (g_dropInfo1[0]) { ImGui::TextColored(ImVec4(0.55f, 0.60f, 0.70f, 1), "%s", g_dropInfo1); ImGui::TextColored(ImVec4(0.55f, 0.60f, 0.70f, 1), "%s", g_dropInfo2); }
     const bool armed = g_clearArmT > 0.f;
     if (Btn(armed ? Tr("TAP AGAIN") : Tr("Remove all weapons"), ImVec2(RowWidth(), 96.f * sc), 1210, armed ? IM_COLOR_ARMED : kDangerCol, g_canRun && (g_clearWeapon != nullptr || g_clearWeapons != nullptr))) {
         if (armed) { g_clearArmT = 0.f; Enqueue(aClearWeapons, 0); }
