@@ -91,7 +91,6 @@ struct ScriptCmd { unsigned short opcode; char params[16]; };            // 18 b
 typedef void (*ScriptFn)(void* self, const ScriptCmd* cmd, ...);        // SAUtils::ScriptCommand(const SCRIPT_COMMAND*, ...)
 static void* g_sautils = nullptr;                                        // the "SAUtils" interface object (set by main.cpp)
 static char g_dropInfo1[120] = "", g_dropInfo2[160] = "";                // what the last drop did (shown under the buttons)
-static bool g_dropKeep = false;                                          // test mode: make the pickup but keep the weapon
 static ScriptFn g_scriptFn = nullptr;
 static int (*g_getPedRef)(void*) = nullptr;                              // CPools::GetPedRef(ped)
 // SAUtils copies every output back with a 64-bit store (low 32 bits = the value, high 32 bits = 0), so each output
@@ -558,7 +557,6 @@ static void DoDropWeapon() {
     snprintf(g_dropInfo1, sizeof(g_dropInfo1), "Weapon %d, model %d, ammo %d, pickup handle %d", type, model, ammo, handle);
     if (handle == -1 || handle == 0) { Diag::Crumb("  pickup failed (handle %d), weapon kept", handle); Toast(Tr("Could not drop here")); return; }
 
-    if (g_dropKeep) { Diag::Crumb("  test mode: weapon kept (pickup handle %d)", handle); Toast(Tr("Pickup created (weapon kept)")); return; }
     Diag::Crumb("  step 4: take weapon (pickup handle %d)", handle);
     g_scriptFn(g_sautils, &kCmdRemove, pedRef, type);
     Diag::Crumb("  done");
@@ -902,7 +900,7 @@ static const TrPair kTr[] = {
     {"Text color", "สีตัวอักษร"}, {"White", "ขาว"}, {"Yellow", "เหลือง"}, {"Green", "เขียว"}, {"Cyan", "ฟ้า"}, {"Pink", "ชมพู"}, {"Orange", "ส้ม"},
     {"Playtime", "เวลาเล่น"},
     {"Drop current weapon", "ทิ้งอาวุธที่ถืออยู่"}, {"Remove current weapon", "ถอดอาวุธที่ถืออยู่"}, {"You have no weapons", "ยังไม่มีอาวุธ"},
-    {"Weapon dropped", "ทิ้งอาวุธแล้ว"}, {"Drop needs the SAUtils mod", "การทิ้งอาวุธต้องใช้ม็อด SAUtils"}, {"Could not drop here", "ทิ้งตรงนี้ไม่ได้"}, {"Test: keep weapon when dropping", "ทดสอบ: สร้างของเก็บแต่ไม่ถอดอาวุธ"}, {"Pickup created (weapon kept)", "สร้างของเก็บแล้ว (ยังถืออาวุธอยู่)"},
+    {"Weapon dropped", "ทิ้งอาวุธแล้ว"}, {"Drop needs the SAUtils mod", "การทิ้งอาวุธต้องใช้ม็อด SAUtils"}, {"Could not drop here", "ทิ้งตรงนี้ไม่ได้"},
     {"Get out of the vehicle first", "ลงจากรถก่อน"},
     {"Weapon", "อาวุธ"}, {"Visual", "ภาพ"}, {"Ammo", "กระสุน"}, {"Remove all weapons", "ถอดอาวุธทั้งหมด"}, {"Weapon given", "ให้อาวุธแล้ว"},
     {"Melee", "อาวุธระยะประชิด"}, {"Handguns", "ปืนพก"}, {"Shotguns", "ปืนลูกซอง"}, {"Submachine guns", "ปืนกลมือ"}, {"Rifles", "ปืนยาว"},
@@ -1482,7 +1480,6 @@ static void PageWeapon() {
     ImGui::SameLine();
     if (Btn(Tr("Remove current weapon"), ImVec2(hw, 96.f * sc), 1212, kBtnCol, g_canRun && g_clearWeapon != nullptr)) Enqueue(aRemoveCurrent, 0);
     if (!haveDrop) ImGui::TextColored(ImVec4(0.55f, 0.60f, 0.70f, 1), "%s", Tr("Drop needs the SAUtils mod"));
-    if (ToggleRow(Tr("Test: keep weapon when dropping"), 1213, g_dropKeep, haveDrop)) g_dropKeep = !g_dropKeep;
     if (g_dropInfo1[0]) { ImGui::TextColored(ImVec4(0.55f, 0.60f, 0.70f, 1), "%s", g_dropInfo1); ImGui::TextColored(ImVec4(0.55f, 0.60f, 0.70f, 1), "%s", g_dropInfo2); }
     const bool armed = g_clearArmT > 0.f;
     if (Btn(armed ? Tr("TAP AGAIN") : Tr("Remove all weapons"), ImVec2(RowWidth(), 96.f * sc), 1210, armed ? IM_COLOR_ARMED : kDangerCol, g_canRun && (g_clearWeapon != nullptr || g_clearWeapons != nullptr))) {
