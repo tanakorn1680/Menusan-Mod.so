@@ -58,6 +58,23 @@ static CheatFn* g_cheatFns = nullptr;               // CCheat::m_aCheatFunctions
 static unsigned char* g_cheatOn = nullptr;          // CCheat::m_aCheatsActive
 static bool g_cheatKnownToggle[128];                // learned: this cheat changed its flag when run
 static void (*g_vehicleCheat)(int) = nullptr;       // CCheat::VehicleCheat(model)
+// Vehicle tab additions (0.10): symbols read from the original ARM CheatMenu binary's own
+// dynamic symbol table (mods/libCheatMenu64.so, v1.6) - these are the SAME engine functions
+// that menu's "Fix vehicle" / "Flip vehicle" / "Vehicle Density Multiplier" buttons call.
+static void (*g_fixVehicle)(void*) = nullptr;       // VehiclePage::FixCurrentVehicle(CVehicle*)
+static void (*g_flipCar)(void*) = nullptr;          // Util::FlipCar(CVehicle*)
+static float* g_pCarDensity = nullptr;              // CCarCtrl::CarDensityMultiplier
+static bool* g_pVehAsDriver = nullptr;              // VehiclePage::ms_bAsDriver
+static bool* g_pVehInAir = nullptr;                 // VehiclePage::ms_bInAir
+// NOTE on As driver / In Air: the original menu's own "Spawn" button sets these two bools, THEN
+// calls its spawn routine, which (same as every other spawn button in that menu) ultimately goes
+// through CCheat::VehicleCheat(model) - the exact function this project's spawn grid already calls
+// via g_vehicleCheat.  VehiclePage also exports a SpawnVehicle(std::string) of its own, but that
+// takes a libc++ std::string by value, whose exact ABI (SSO layout, pointer vs inline buffer) was
+// NOT independently verified here, so it is deliberately NOT called - calling a function with a
+// slightly-wrong parameter ABI corrupts the stack instead of failing cleanly.  Setting the two
+// flag bytes directly (same raw-pointer-write pattern already used for g_visPtr / CarDensity)
+// and reusing the already-proven g_vehicleCheat call is the safer route.
 static void (*g_setClock)(unsigned char, unsigned char, unsigned char) = nullptr;   // CClock::SetGameClock
 static void (*g_cheatWanted)(void*, int) = nullptr; // CPlayerPed::CheatWantedLevel(level)
 static void* (*g_findPlayerPed)(int) = nullptr;     // FindPlayerPed(0)
@@ -152,6 +169,11 @@ static int ResolveGame(uintptr_t (*lookup)(const char*)) {
     Res(lookup, g_cheatFns, "_ZN6CCheat17m_aCheatFunctionsE", found);
     Res(lookup, g_cheatOn, "_ZN6CCheat15m_aCheatsActiveE", found);
     Res(lookup, g_vehicleCheat, "_ZN6CCheat12VehicleCheatEi", found);
+    Res(lookup, g_fixVehicle, "_ZN11VehiclePage17FixCurrentVehicleEP8CVehicle", found);
+    Res(lookup, g_flipCar, "_ZN4Util7FlipCarEP8CVehicle", found);
+    Res(lookup, g_pCarDensity, "_ZN8CCarCtrl20CarDensityMultiplierE", found);
+    Res(lookup, g_pVehAsDriver, "_ZN11VehiclePage12ms_bAsDriverE", found);
+    Res(lookup, g_pVehInAir, "_ZN11VehiclePage9ms_bInAirE", found);
     Res(lookup, g_setClock, "_ZN6CClock12SetGameClockEhhh", found);
     Res(lookup, g_cheatWanted, "_ZN10CPlayerPed16CheatWantedLevelEi", found);
     Res(lookup, g_findPlayerPed, "_Z13FindPlayerPedi", found);
@@ -563,9 +585,32 @@ static void DoDropWeapon() {
     Toast(Tr("Weapon dropped"));
 }
 
+// ---- Vehicle tab: fix / flip the vehicle the player is currently in ----
+// Both call straight into the same engine functions the original menu's own "Fix vehicle" /
+// "Flip vehicle" buttons use (read from its own binary), so there is no hand-rolled damage or
+// orientation math here - same approach DoTeleport already takes with CAutomobile::Teleport etc.
+static void DoFixVehicle() {
+    char* ped = PlayerPed();
+    char* veh = (ped && g_findPlayerVehicle) ? (char*)g_findPlayerVehicle(-1, true) : nullptr;
+    if (!veh) { Toast(Tr("Get in a vehicle first")); return; }
+    if (!g_fixVehicle) return;
+    Diag::Crumb("fix vehicle");
+    g_fixVehicle(veh);
+    Toast(Tr("Vehicle fixed"));
+}
+static void DoFlipVehicle() {
+    char* ped = PlayerPed();
+    char* veh = (ped && g_findPlayerVehicle) ? (char*)g_findPlayerVehicle(-1, true) : nullptr;
+    if (!veh) { Toast(Tr("Get in a vehicle first")); return; }
+    if (!g_flipCar) return;
+    Diag::Crumb("flip vehicle");
+    g_flipCar(veh);
+    Toast(Tr("Vehicle flipped"));
+}
+
 // ============================================================ action queue
 // The UI never touches the game directly; it queues actions that run inside the game's update tick.
-enum { aCheat = 0, aVehicle, aClock, aWanted, aHealth, aArmour, aMoney, aTimeScale, aClockHM, aDay, aDayLen, aWeather, aTopDown, aTopZoom, aTeleport, aGiveWeapon, aClearWeapons, aFlag, aDropWeapon, aRemoveCurrent };
+enum { aCheat = 0, aVehicle, aClock, aWanted, aHealth, aArmour, aMoney, aTimeScale, aClockHM, aDay, aDayLen, aWeather, aTopDown, aTopZoom, aTeleport, aGiveWeapon, aClearWeapons, aFlag, aDropWeapon, aRemoveCurrent, aFixVehicle, aFlipVehicle, aCarDensity };
 struct Act { int kind; int i; float f; float g; };
 static const int kQueueSize = 32;
 static Act g_queue[kQueueSize];
@@ -612,7 +657,16 @@ static void RunQueued(bool gameIsRunning) {
                 if (a.i >= 0 && a.i < kNumCheats) { Diag::Crumb("cheat %s", kCheat[a.i].name); ExecCheat(a.i); }
                 break;
             case aVehicle:
-                if (g_vehicleCheat) { Diag::Crumb("spawn vehicle model %d", a.i); g_vehicleCheat(a.i); }
+                if (g_vehicleCheat) {
+                    // a.f != 0 marks a spawn-options request (model-ID box / As driver / In air);
+                    // the plain 88-car grid buttons pass a.f == 0 and leave the game's own last state alone.
+                    if (a.f != 0.f) {
+                        if (g_pVehAsDriver) *g_pVehAsDriver = g_spawnAsDriver;
+                        if (g_pVehInAir) *g_pVehInAir = g_spawnInAir;
+                    }
+                    Diag::Crumb("spawn vehicle model %d%s", a.i, a.f != 0.f ? " (spawn options)" : "");
+                    g_vehicleCheat(a.i);
+                }
                 break;
             case aClock:   if (g_setClock) g_setClock((unsigned char)a.i, 0, g_pCurrentDay ? *g_pCurrentDay : 0); break;
             case aWanted: {
@@ -655,6 +709,9 @@ static void RunQueued(bool gameIsRunning) {
             case aDropWeapon: DoDropWeapon(); break;
             case aRemoveCurrent: DoRemoveCurrent(); break;
             case aFlag: if (a.i >= 0 && a.i < kNumVis && g_visPtr[a.i]) *g_visPtr[a.i] = (a.f != 0.f) ? 1 : 0; break;
+            case aFixVehicle: DoFixVehicle(); break;
+            case aFlipVehicle: DoFlipVehicle(); break;
+            case aCarDensity: if (g_pCarDensity) *g_pCarDensity = Clamp(a.f, 0.f, 10.f); break;
             case aTeleport:
                 DoTeleport(a.f, a.g);
                 __atomic_store_n(&g_tpPending, 0, __ATOMIC_RELEASE);
@@ -686,6 +743,9 @@ static bool g_ovFps = false, g_ovCoords = false, g_ovPlay = false, g_ovNoBg = fa
 static int g_ovPos = 1, g_ovColor = 0;            // position 0..4 (TL, TC, TR, BL, BR), colour 0..5
 static float g_fps = 60.f, g_playSec = 0.f, g_ovHue = 0.f;
 static int g_tab = kTabCheats, g_lastTab = -1;
+static float g_densityCache = 1.f;                 // Vehicle > Density Multiplier, last value read from the game
+static bool g_spawnAsDriver = false, g_spawnInAir = false;   // Vehicle > Spawn Vehicle > As driver / In air
+static char g_spawnModelId[8] = "";                           // Vehicle > Spawn Vehicle > Vehicle model ID text entry
 static char g_toast[80] = "";
 static float g_toastT = 0.f;
 static bool g_expanded[64];                       // section expand/collapse state (cheat groups 0..11, vehicle sections 20..)
@@ -902,6 +962,12 @@ static const TrPair kTr[] = {
     {"Drop current weapon", "ทิ้งอาวุธที่ถืออยู่"}, {"Remove current weapon", "ถอดอาวุธที่ถืออยู่"}, {"You have no weapons", "ยังไม่มีอาวุธ"},
     {"Weapon dropped", "ทิ้งอาวุธแล้ว"}, {"Drop needs the SAUtils mod", "การทิ้งอาวุธต้องใช้ม็อด SAUtils"}, {"Could not drop here", "ทิ้งตรงนี้ไม่ได้"},
     {"Get out of the vehicle first", "ลงจากรถก่อน"},
+    {"Get in a vehicle first", "ขึ้นรถก่อน"}, {"Get in a vehicle to fix or flip it", "ต้องอยู่ในรถถึงจะซ่อมหรือพลิกได้"},
+    {"Fix vehicle", "ซ่อมรถ"}, {"Flip vehicle", "พลิกรถ"}, {"Vehicle fixed", "ซ่อมรถแล้ว"}, {"Vehicle flipped", "พลิกรถแล้ว"},
+    {"Vehicle Density Multiplier", "ตัวคูณความหนาแน่นยานพาหนะ"}, {"Spawn Vehicle", "เรียกยานพาหนะ"}, {"Browse Vehicles", "เลือกจากรายการรถ"},
+    {"No burn on flipped", "พลิกแล้วไม่ไฟไหม้"}, {"Stay on bike", "ไม่ตกจากมอเตอร์ไซค์"},
+    {"As driver", "เป็นคนขับ"}, {"In air", "ลอยกลางอากาศ"}, {"Vehicle model ID", "ไอดีรุ่นรถ"},
+    {"Enter number then tap Spawn", "ใส่หมายเลขแล้วแตะเรียก"}, {"Spawn", "เรียก"}, {"Invalid model ID", "ไอดีรุ่นรถไม่ถูกต้อง"},
     {"Weapon", "อาวุธ"}, {"Visual", "ภาพ"}, {"Ammo", "กระสุน"}, {"Remove all weapons", "ถอดอาวุธทั้งหมด"}, {"Weapon given", "ให้อาวุธแล้ว"},
     {"Melee", "อาวุธระยะประชิด"}, {"Handguns", "ปืนพก"}, {"Shotguns", "ปืนลูกซอง"}, {"Submachine guns", "ปืนกลมือ"}, {"Rifles", "ปืนยาว"},
     {"Heavy weapons", "อาวุธหนัก"}, {"Thrown", "อาวุธขว้าง"}, {"Gear", "อุปกรณ์"},
@@ -1133,6 +1199,7 @@ static void Init(float scale) {
     g_expanded[20] = true;       // first vehicle section
     g_expanded[30] = g_expanded[31] = g_expanded[32] = true;   // Game: switches, speed, time
     g_expanded[36] = g_expanded[37] = true;                    // Teleport: waypoint, coordinates
+    g_expanded[52] = true;                                     // Vehicle: Density Multiplier (open by default)
 }
 
 // ===================================================================== overlay
@@ -1242,9 +1309,90 @@ static void PagePlayer() {
     ImGui::Dummy(ImVec2(1.f, 90.f * sc));
 }
 
+// Vehicle tab additions (0.10): read the density multiplier 4 times a second, same cadence RefreshVis uses.
+static void RefreshDensity() {
+    static double next = 0.0;
+    const double t = MonoNow();
+    if (t < next) return;
+    next = t + 0.25;
+    float v = 0.f;
+    if (g_pCarDensity && SafeMem::Get(g_pCarDensity, 0, v) && Finite(v)) g_densityCache = v;
+}
+
 static void PageVehicle() {
     const float sc = g_sc;
     const float sp = ImGui::GetStyle().ItemSpacing.x;
+    const bool inVeh = g_canRun && g_findPlayerVehicle != nullptr;
+
+    // ---- current vehicle: fix / flip ----
+    RefreshDensity();
+    const float hw = (RowWidth() - sp) * 0.5f;
+    if (Btn(Tr("Fix vehicle"), ImVec2(hw, 96.f * sc), 2900, kBtnCol, inVeh && g_fixVehicle != nullptr)) {
+        if (!g_canRun) Toast(Tr("Start playing first")); else Enqueue(aFixVehicle, 0);
+    }
+    ImGui::SameLine();
+    if (Btn(Tr("Flip vehicle"), ImVec2(hw, 96.f * sc), 2901, kBtnCol, inVeh && g_flipCar != nullptr)) {
+        if (!g_canRun) Toast(Tr("Start playing first")); else Enqueue(aFlipVehicle, 0);
+    }
+    if (!inVeh) ImGui::TextColored(ImVec4(0.55f, 0.60f, 0.70f, 1), "%s", Tr("Get in a vehicle to fix or flip it"));
+    ImGui::Spacing();
+
+    // ---- vehicle density multiplier ----
+    // g_expanded indices: 20-24 = Browse Vehicles sections (one per section in vehicles.inc),
+    // 40-42 = Visual tab, 44-51 = Weapon tab sections; 52-54 picked here to stay clear of all of them.
+    if (Section(Tr("Vehicle Density Multiplier"), 52, 2910)) {
+        ImGui::TextColored(ImVec4(0.72f, 0.76f, 0.85f, 1), "%.2fx", g_densityCache);
+        const float qw = (RowWidth() - sp * 3.f) / 4.f;
+        static const float kPreset[4] = {0.f, 1.f, 2.f, 4.f};
+        static const char* const kPresetLbl[4] = {"0x", "1x", "2x", "4x"};
+        for (int i = 0; i < 4; i++) {
+            if (i) ImGui::SameLine();
+            const bool sel = fabsf(g_densityCache - kPreset[i]) < 0.01f;
+            if (Btn(kPresetLbl[i], ImVec2(qw, 92.f * sc), 2920 + i, sel ? kAccentCol : kBtnCol, g_canRun && g_pCarDensity != nullptr)) {
+                g_densityCache = kPreset[i];
+                Enqueue(aCarDensity, 0, kPreset[i]);
+            }
+        }
+        ImGui::Spacing();
+    }
+
+    // ---- spawn options: As driver / In air + spawn by model ID ----
+    // A touch digit-pad (not ImGui::InputText) to stay consistent with the rest of the menu, which
+    // is entirely driven from raw touch events rather than ImGui's own keyboard/IO state machine.
+    if (Section(Tr("Spawn Vehicle"), 53, 2940)) {
+        const bool haveOpts = g_pVehAsDriver != nullptr && g_pVehInAir != nullptr;
+        if (Btn(Tr("As driver"), ImVec2(hw, 92.f * sc), 2941, kBtnCol, haveOpts, g_spawnAsDriver ? Tr("ON") : Tr("OFF"), g_spawnAsDriver))
+            g_spawnAsDriver = !g_spawnAsDriver;
+        ImGui::SameLine();
+        if (Btn(Tr("In air"), ImVec2(hw, 92.f * sc), 2942, kBtnCol, haveOpts, g_spawnInAir ? Tr("ON") : Tr("OFF"), g_spawnInAir))
+            g_spawnInAir = !g_spawnInAir;
+        ImGui::Spacing();
+        ImGui::TextColored(ImVec4(0.72f, 0.76f, 0.85f, 1), "%s", Tr("Vehicle model ID"));
+        ImGui::TextColored(ImVec4(0.45f, 0.62f, 1.f, 1.f), "%s", g_spawnModelId[0] ? g_spawnModelId : "---");
+        const float kw = (RowWidth() - sp * 2.f) / 3.f;
+        static const char* const kKeys[12] = {"1","2","3","4","5","6","7","8","9","C","0","<"};
+        for (int i = 0; i < 12; i++) {
+            if (i % 3) ImGui::SameLine();
+            if (Btn(kKeys[i], ImVec2(kw, 88.f * sc), 2950 + i, kBtnCol, true)) {
+                const size_t len = strlen(g_spawnModelId);
+                if (kKeys[i][0] == 'C') g_spawnModelId[0] = 0;
+                else if (kKeys[i][0] == '<') { if (len > 0) g_spawnModelId[len - 1] = 0; }
+                else if (len < sizeof(g_spawnModelId) - 1) { g_spawnModelId[len] = kKeys[i][0]; g_spawnModelId[len + 1] = 0; }
+            }
+        }
+        ImGui::Spacing();
+        const int model = atoi(g_spawnModelId);
+        const bool validId = model >= 400 && model <= 611;    // GTA SA vehicle model ID range
+        if (Btn(Tr("Spawn"), ImVec2(RowWidth(), 96.f * sc), 2970, kBtnCol, g_canRun && g_vehicleCheat != nullptr && validId)) {
+            Enqueue(aVehicle, model, 1.f);     // f = 1 marks this as a spawn-options request (applies As driver / In air)
+            Toast(Tr("Spawn"));
+        }
+        if (g_spawnModelId[0] && !validId) ImGui::TextColored(ImVec4(1.f, 0.55f, 0.45f, 1), "%s", Tr("Invalid model ID"));
+        ImGui::Spacing();
+    }
+
+    // ---- spawn vehicle: the 88-car grid, picked by name instead of typing a model ID ----
+    if (!Section(Tr("Browse Vehicles"), 54, 2930)) { ImGui::Dummy(ImVec2(1.f, 90.f * sc)); return; }
     const float colW = (RowWidth() - sp * 2.f) / 3.f;
     const char* lastSec = nullptr;
     int secIdx = -1, n = 0;

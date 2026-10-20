@@ -272,5 +272,5 @@ ON_MOD_LOAD()
     HOOKSYM(ClockUpdate,              g_hGame, kClock);
     logger->Info("loaded, hooks installed");
     Diag::KeepPreviousSession();                 // the breadcrumbs of a crashed run survive the restart
-    Diag::Crumb("ProMenu 0.9.3 loaded");
+    Diag::Crumb("ProMenu 0.10 loaded");
 }
