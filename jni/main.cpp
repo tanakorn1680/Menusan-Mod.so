@@ -161,6 +161,7 @@ static bool InitImGui() {
     UI::Init(sc);
     UI::LoadConfig();
     UI::LoadSpots();
+    UI::BootVehicle();                          // re-apply "No burn on flipped" when it was left on last time
     UI::g_dbgFound = UI::ResolveGame(GameSym);
     logger->Info("ImGui ready, screen %dx%d, game symbols %d/%d, cheat tables %s", (int)w, (int)h, UI::g_dbgFound, UI::g_symTotal, UI::CheatTablesOk() ? "ok" : "MISSING");
     g_lastT = NowSec();
@@ -272,5 +273,5 @@ ON_MOD_LOAD()
     HOOKSYM(ClockUpdate,              g_hGame, kClock);
     logger->Info("loaded, hooks installed");
     Diag::KeepPreviousSession();                 // the breadcrumbs of a crashed run survive the restart
-    Diag::Crumb("ProMenu 0.9.3 loaded");
+    Diag::Crumb("ProMenu 0.10.0 loaded");
 }

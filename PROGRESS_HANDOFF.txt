@@ -1,0 +1,84 @@
+PROGRESS_HANDOFF.txt  -  อ่านไฟล์นี้ก่อนทำงานต่อ (สำหรับ AI/คนที่รับช่วง)
+==========================================================================
+
+1. โปรเจกต์คืออะไร
+-------------------
+ProMenu = ม็อด AML (arm64, libProMenu64.so) สำหรับ GTA San Andreas Android 2.10 (com.rockstargames.gtasa)
+เมนูลอย (ปุ่มวงกลม + แผงสัมผัส) วาดด้วย ImGui ผ่าน RenderWare ของเกม เป้าหมายคือทำฟังก์ชันให้ครบเท่าเมนู
+"ARM CheatMenu" เดิม (libCheatMenu64.so ในแพ็ก GTA_SA_AML_PLUGIN_2.10) แต่ใช้งานด้วยการแตะได้สะดวก
+บิลด์: push ขึ้น GitHub -> Actions (.github/workflows/android.yml) -> setup.sh โหลด ImGui + AML headers -> ndk-build
+ผู้ใช้คอมไพล์ในเครื่องไม่ได้ ผู้ใช้ไม่ทดสอบในเกมระหว่างที่เราทำ -> ต้องเขียนให้ "ปลอดภัยเมื่อผิด" เสมอ
+
+2. กติกาที่ผู้ใช้สั่ง (ต้องทำตาม)
+--------------------------------
+- เพิ่มเฉพาะฟังก์ชันที่ "ยังไม่มี" เมื่อเทียบกับเมนู ARM เดิม
+- ส่งงานเป็น zip ที่มี "เฉพาะไฟล์ที่แก้" วางโครงสร้างพาธตาม root ของ repo เพื่อแตกทับของเดิมได้ทันที
+- ไม่ต้องทดสอบ/ไม่ต้องทำอะไรเกินจำเป็น (ทำ syntax check ด้วย g++ -fsyntax-only ได้ถ้าถูก)
+- ทุกครั้งที่จบงานให้อัปเดตไฟล์นี้ (ความคืบหน้า เป้าหมาย แนวทาง)
+- ผู้ใช้สื่อสารภาษาไทย
+
+3. โครงสร้างไฟล์
+-----------------
+jni/main.cpp      จุด entry, hook 4 ตัว (AND_TouchEvent, DebugDisplayTextBuffer, ShutdownRenderWare, CClock::Update), หาฟอนต์, SAUtils
+jni/ui.h          UI ทั้งหมด + การเข้าถึงเกม (ไฟล์ใหญ่ ~2200 บรรทัด) แบ่งเป็นส่วนตามคอมเมนต์ // =====
+jni/rw_backend.h  วาด ImGui ผ่าน RenderWare        jni/safemem.h  อ่านหน่วยความจำเกมแบบไม่ SIGSEGV (write() ลง pipe)
+jni/diag.h        breadcrumb -> files/ProMenu/last_action.txt (ไฟล์ล่าสุดก่อนเกมเด้ง)
+jni/*.inc         ตารางสูตร 100 ตัว, หมวด, ชื่อไทย, รายการรถ 88 คัน
+กติกาออกแบบใน ui.h:
+  * UI แค่ "วาด + ใส่คิว" (Enqueue(aXxx,...)) ส่วนที่แตะเกมจริงรันใน RunQueued() ซึ่งถูกเรียกจาก hook CClock::Update
+  * ทุกการอ่านโครงสร้างเกมใช้ SafeMem::Get/Read; เขียนผ่าน PokeMem (เขียนเมื่ออ่านได้เท่านั้น)
+  * action ต้องหา ped/vehicle ใหม่ตอนรันเอง ห้ามเก็บพอยน์เตอร์จาก UI
+  * ทุกขั้นตอนเสี่ยงใส่ Diag::Crumb(...) ก่อน
+  * ปุ่ม: Btn()/ToggleRow()/Stepper()/Section()/Header() id ต้องไม่ซ้ำในหน้าเดียวกัน; g_expanded[64] เก็บสถานะพับ
+    (ใช้แล้ว: 0-11 สูตร, 20-24 รายการรถ, 25-29 Vehicle ใหม่, 30-35 Game, 36-39 Teleport, 40-42 Visual, 44-51 Weapon)
+  * แปลภาษา: ตาราง kTr[] (en->th) ผ่าน Tr("...") ข้อความที่ไม่มีในตารางแสดงอังกฤษ
+  * config.txt: "fx fy alpha scale fade lock lang ovFlags ovPos ovColor noBurn" (ฟิลด์ท้ายสุดเพิ่มใน 0.10.0 ไฟล์เก่าอ่านได้)
+
+4. สถานะ ณ ตอนนี้ (v0.10.0)
+---------------------------
+เสร็จแล้ว: Player(เลือด/เกราะ/เงิน/wanted), Vehicle(เต็ม), Weapon, Teleport, Visual(9 สวิตช์), Game, Cheats 100, Menu(ภาษา/overlay)
+Vehicle 0.10.0 (ครบตามรายการที่ผู้ใช้ขอ):
+  Fix vehicle, Flip vehicle, No burn on flipped, Stay on bike, Perfect handling,
+  สวิตช์ 8 ตัว (Always Skidmarks, Engine State, No Particles, Comedy Control, HS Targetted, Invisible Car, Lights State, Lock Door),
+  Vehicle Density Multiplier, Switch seats / Enter near vehicle (Driver, Passenger 1..N, แสดงชื่อรุ่น+จำนวนที่นั่ง),
+  Spawn by ID (As driver / In Air, ID 400-611)
+ยังไม่ได้ทำ (จากเมนู ARM เดิม): Scene/คัตซีน, Ped, Player ส่วนที่เหลือ, Game: ล็อกซูมกล้อง/หยุดเวลาภารกิจ/น้ำแข็งตัว/แรงโน้มถ่วง/
+  Overlay ชื่อสถานที่, Visual: Keep fog on low graphic + Invisible water (ต้อง hook เอง)
+  "Wheels only" มีอยู่แล้วเป็นสูตร ONLYRENDERWHEELS ในแท็บ Cheats; "Blow up cars" ก็มีในสูตร
+ทุกอย่างของ 0.10.0 "ยังไม่เคยทดสอบในเกมจริง" ผ่านแค่ g++ -fsyntax-only
+
+5. วิธีหาข้อมูลของเกม (แนวทางที่ใช้ได้ผล)
+-----------------------------------------
+ถอดจาก libCheatMenu64.so ตรง ๆ: llvm-objdump -d --no-show-raw-insn --start-address=.. --stop-address=.. ; nm -D -C ; strings
+ฟังก์ชันหน้า UI เดิมส่งออกใน dynsym: VehiclePage::Draw (0x1f37f8), SpawnVehicle (0x1f4358), Util::FlipCar (0x1e998c),
+GetClosestCar (0x1e9b24) ฯลฯ  struct คำสั่งสคริปต์ = 18 ไบต์ {u16 opcode, char params[16]} อ่านจาก rodata ได้ตรง ๆ
+เรียกสคริปต์ผ่าน SAUtils::ScriptCommand (vtable ช่อง 39 = 0x138) ตัวแปร output ต้องกว้าง 8 ไบต์ (ScriptOut)
+AML API ที่ใช้: aml->GetLib("libGTASA.so") ได้ base, aml->Write(dest, src, size) เขียนโค้ดเกม (ดู aml_src/mod/iaml.h)
+
+6. ออฟเซ็ต/ข้อมูลที่ถอดแล้ว (64-bit, เกม 2.10)
+-----------------------------------------------
+CPed:     +0x585 bit0=อยู่ในรถ, +0x708 m_pVehicle, +0x538 intelligence (scanner รถ 16 ช่องที่ +0x190, ใกล้สุดก่อน; ข้ามคันที่ byte+0x56A bit2 set),
+          +0x58C flag 64 บิต (บิต 27-28 = bCantBeKnockedOffBike: 1 = ไม่ตก), +0x4B area code, +0x6AC/6B0/6B4 เลือด/เลือดสูงสุด/เกราะ
+CVehicle: +0x28 entity flags (บิต7 = visible), +0x32 model index (short), +0x4B area, +0x568 vehicle flags 64 บิต
+          (บิต4 engine on, 12 comedy, 17 owned by player, 40 always skidmarks, 41 engine off, 46 HS targetted, 55 no particles),
+          +0x5A0 driver, +0x5EC max passengers (byte), +0x634 health, +0x684 door lock (1 ปลดล็อก, 4 ล็อก), +0x734 type (6=รถไฟ), +0x738 subclass
+          (0 car, 2 quad, 3 heli, 4 plane, 9 bike, 10 bmx)  ชื่อรุ่น = CModelInfo::GetModelInfo(id)+0xC (char[24])
+สคริปต์:  067F FORCE_CAR_LIGHTS(1 ปิด/2 เปิด), 036A WARP_CHAR_INTO_CAR, 0430 ..AS_PASSENGER(ped,car,seat), 06BE/0731 อ่าน/เขียนค่าที่ Flip ใช้ (+180),
+          02E3 GET_CAR_SPEED, 04BA SET_CAR_FORWARD_SPEED, 0362 WARP_CHAR_FROM_CAR_TO_COORD, 07BD DELETE_MISSION_TRAIN, 00A6 DELETE_CAR,
+          00A5 CREATE_CAR, 01C3 MARK_CAR_AS_NO_LONGER_NEEDED
+แพตช์ No burn on flipped: libGTASA+0x671A10 (เดิม 0xBD063660) และ +0x4EE010 (เดิม 0xBD063540) ; NOP = 0xD503201F
+  โค้ดจะแพตช์เฉพาะเมื่อไบต์ตรงกับค่าเดิมหรือ NOP เท่านั้น
+Fix: switch ที่ +0x738 -> CAutomobile/CQuadBike/CHeli/CPlane/CBike::Fix แล้วตั้ง health = 1000
+Perfect handling = m_aCheatsActive[ดัชนี STRONGGRIP=35] ; Stay on bike เขียนบิต 27 ของ ped+0x58C (ปิด = 0 ไม่ใช่ 2 แบบเดิม)
+
+7. ความต่างจากเมนูเดิมโดยตั้งใจ
+------------------------------
+- Lights State: เมนูเดิมผูกกับ CVehicle::ms_forceVehicleLightsOff ซึ่งอ่านค่ากลับจริงไม่ได้ ของเรา "จำค่าที่ส่งล่าสุด" ต่อคัน
+- Stay on bike ปิด = ค่าเริ่มต้นเกม (0)
+- ตำแหน่งหน้ารถตอนเสกไม่ใช้ TransformFromObjectSpace แต่คำนวณจาก GetHeading (ข้างหน้า 5 หน่วย, หมุน +90 องศา)
+- เสก As driver แล้วอยู่ในรถ = ลบรถคันเดิมแล้วแทนที่ (เหมือนเดิม) ; In Air มีผลเฉพาะคู่กับ As driver (เหมือนเดิม)
+
+8. สิ่งที่ควรทำต่อ
+------------------
+- ให้ผู้ใช้ทดสอบ Vehicle ในเกม ถ้าเด้งดู files/ProMenu/last_action.txt / previous_session.txt
+- ทำหมวดที่เหลือในข้อ 4 ตามลำดับที่ผู้ใช้สั่ง ใช้วิธีข้อ 5

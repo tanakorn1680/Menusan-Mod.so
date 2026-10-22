@@ -74,12 +74,6 @@ static void (*g_bikeTeleport)(void*, Vec3*, unsigned char) = nullptr;  // CBike:
 static void (*g_autoTeleport)(void*, Vec3*, unsigned char) = nullptr;  // CAutomobile::Teleport
 static void (*g_bikePlace)(void*) = nullptr;                        // CBike::PlaceOnRoadProperly
 static void (*g_autoPlace)(void*) = nullptr;                        // CAutomobile::PlaceOnRoadProperly
-// vehicle fix: confirmed from the original menu's own import table (one symbol per vehicle class, not virtual)
-static void (*g_autoFix)(void*) = nullptr;                          // CAutomobile::Fix
-static void (*g_bikeFix)(void*) = nullptr;                          // CBike::Fix
-static void (*g_heliFix)(void*) = nullptr;                          // CHeli::Fix
-static void (*g_planeFix)(void*) = nullptr;                         // CPlane::Fix
-static void (*g_quadFix)(void*) = nullptr;                          // CQuadBike::Fix
 static float (*g_groundZ)(float, float) = nullptr;                  // CWorld::FindGroundZForCoord
 static void (*g_loadSceneCol)(const Vec3*) = nullptr;               // CStreaming::LoadSceneCollision
 static void (*g_loadScene)(const Vec3*) = nullptr;                  // CStreaming::LoadScene
@@ -138,6 +132,22 @@ static void (*g_forceWeather)(short) = nullptr;     // CWeather::ForceWeather
 static void (*g_releaseWeather)() = nullptr;        // CWeather::ReleaseWeather
 static bool* g_pTopEnable = nullptr;                // TopDownCamera::m_bEnable
 static int* g_pTopZoom = nullptr;                   // TopDownCamera::m_nZoom
+// vehicle tools (symbol names and the offsets used below were read out of the original ARM menu's VehiclePage / Util code)
+static void (*g_fixAuto)(void*)  = nullptr;         // CAutomobile::Fix
+static void (*g_fixBike)(void*)  = nullptr;         // CBike::Fix
+static void (*g_fixQuad)(void*)  = nullptr;         // CQuadBike::Fix
+static void (*g_fixHeli)(void*)  = nullptr;         // CHeli::Fix
+static void (*g_fixPlane)(void*) = nullptr;         // CPlane::Fix
+static int   (*g_getVehicleRef)(void*) = nullptr;   // CPools::GetVehicleRef(vehicle)
+static void* (*g_getVehicle)(int) = nullptr;        // CPools::GetVehicle(handle)
+static void  (*g_setModelDeletable)(int) = nullptr; // CStreaming::SetModelIsDeletable(model)
+static bool  (*g_isHeliModel)(int) = nullptr;       // CModelInfo::IsHeliModel
+static bool  (*g_isPlaneModel)(int) = nullptr;      // CModelInfo::IsPlaneModel
+static void* (*g_getModelInfo)(int) = nullptr;      // CModelInfo::GetModelInfo(id)   (model name = char[24] at +0xC)
+static float (*g_getHeading)(void*) = nullptr;      // CPlaceable::GetHeading
+static void  (*g_setHeading)(void*, float) = nullptr;   // CPlaceable::SetHeading
+static float* g_pCarDensity = nullptr;              // CCarCtrl::CarDensityMultiplier
+static int g_perfectIdx = -1;                       // index of STRONGGRIP ("Perfect handling") in the cheat list
 static int g_symTotal = 0;                          // how many game symbols ResolveGame looked for
 
 // Field offsets inside the 64-bit game structures (read from the original menu's code)
@@ -171,11 +181,6 @@ static int ResolveGame(uintptr_t (*lookup)(const char*)) {
     Res(lookup, g_autoTeleport, "_ZN11CAutomobile8TeleportE7CVectorh", found);
     Res(lookup, g_bikePlace, "_ZN5CBike19PlaceOnRoadProperlyEv", found);
     Res(lookup, g_autoPlace, "_ZN11CAutomobile19PlaceOnRoadProperlyEv", found);
-    Res(lookup, g_autoFix, "_ZN11CAutomobile3FixEv", found);
-    Res(lookup, g_bikeFix, "_ZN5CBike3FixEv", found);
-    Res(lookup, g_heliFix, "_ZN5CHeli3FixEv", found);
-    Res(lookup, g_planeFix, "_ZN6CPlane3FixEv", found);
-    Res(lookup, g_quadFix, "_ZN9CQuadBike3FixEv", found);
     Res(lookup, g_groundZ, "_ZN6CWorld19FindGroundZForCoordEff", found);
     Res(lookup, g_loadSceneCol, "_ZN10CStreaming18LoadSceneCollisionEPK7CVector", found);
     Res(lookup, g_loadScene, "_ZN10CStreaming9LoadSceneEPK7CVector", found);
@@ -198,7 +203,22 @@ static int ResolveGame(uintptr_t (*lookup)(const char*)) {
     Res(lookup, g_releaseWeather, "_ZN8CWeather14ReleaseWeatherEv", found);
     Res(lookup, g_pTopEnable, "_ZN13TopDownCamera9m_bEnableE", found);
     Res(lookup, g_pTopZoom, "_ZN13TopDownCamera7m_nZoomE", found);
+    Res(lookup, g_fixAuto, "_ZN11CAutomobile3FixEv", found);
+    Res(lookup, g_fixBike, "_ZN5CBike3FixEv", found);
+    Res(lookup, g_fixQuad, "_ZN9CQuadBike3FixEv", found);
+    Res(lookup, g_fixHeli, "_ZN5CHeli3FixEv", found);
+    Res(lookup, g_fixPlane, "_ZN6CPlane3FixEv", found);
+    Res(lookup, g_getVehicleRef, "_ZN6CPools13GetVehicleRefEP8CVehicle", found);
+    Res(lookup, g_getVehicle, "_ZN6CPools10GetVehicleEi", found);
+    Res(lookup, g_setModelDeletable, "_ZN10CStreaming19SetModelIsDeletableEi", found);
+    Res(lookup, g_isHeliModel, "_ZN10CModelInfo11IsHeliModelEi", found);
+    Res(lookup, g_isPlaneModel, "_ZN10CModelInfo12IsPlaneModelEi", found);
+    Res(lookup, g_getModelInfo, "_ZN10CModelInfo12GetModelInfoEi", found);
+    Res(lookup, g_getHeading, "_ZN10CPlaceable10GetHeadingEv", found);
+    Res(lookup, g_setHeading, "_ZN10CPlaceable10SetHeadingEf", found);
+    Res(lookup, g_pCarDensity, "_ZN8CCarCtrl20CarDensityMultiplierE", found);
     for (int i = 0; i < kNumCheats; i++) if (!strcmp(kCheat[i].name, "INVINCIBILITY")) g_godIdx = i;
+    for (int i = 0; i < kNumCheats; i++) if (!strcmp(kCheat[i].name, "STRONGGRIP")) g_perfectIdx = i;
     return found;
 }
 
@@ -258,26 +278,6 @@ static bool PlayerPos(float* out) {
     char* veh = g_findPlayerVehicle ? (char*)g_findPlayerVehicle(-1, true) : nullptr;
     if (veh && EntityPos(veh, out)) return true;
     return EntityPos(ped, out);
-}
-
-// Fix the vehicle the player is in. Unlike Teleport, the original menu calls one symbol per
-// vehicle class directly (no virtual dispatch), so this reads the same type/class fields and picks
-// the matching Fix function the same way the Teleport fallback already does.
-static void DoFixVehicle() {
-    char* veh = g_findPlayerVehicle ? (char*)g_findPlayerVehicle(-1, true) : nullptr;
-    if (!veh) { Toast(Tr("Get in a vehicle first")); return; }
-    int cls = 0; SafeMem::Get(veh, 0x738, cls);
-    int type = -1; SafeMem::Get(veh, 0x734, type);
-    void (*fn)(void*) = nullptr; const char* kind = "auto";
-    if (cls == 3 && g_heliFix) { fn = g_heliFix; kind = "heli"; }
-    else if (cls == 4 && g_planeFix) { fn = g_planeFix; kind = "plane"; }
-    else if ((type == 9 || type == 10) && g_bikeFix) { fn = g_bikeFix; kind = "bike"; }
-    else if (type == 2 && g_quadFix) { fn = g_quadFix; kind = "quad"; }
-    else if (g_autoFix) { fn = g_autoFix; kind = "auto"; }
-    if (!fn) { Diag::Crumb("fix refused: unsupported vehicle (type %d class %d)", type, cls); Toast(Tr("Can't fix this vehicle")); return; }
-    Diag::Crumb("fix vehicle (%s)", kind);
-    fn(veh);
-    Toast(Tr("Vehicle fixed"));
 }
 
 // ---- the map waypoint (radar blip sprite 41) -------------------------------------------------
@@ -594,9 +594,308 @@ static void DoDropWeapon() {
     Toast(Tr("Weapon dropped"));
 }
 
+// ============================================================== vehicles
+// Everything in this block was read out of the original ARM menu (VehiclePage::Draw / SpawnVehicle, Util::FlipCar / GetClosestCar):
+// the offsets are for the 64-bit game, the script command numbers are the ones the original sends through SAUtils.
+static const int kOffPedInVeh = 0x585;       // CPed: bit 0 = sitting in a vehicle
+static const int kOffPedVeh = 0x708;         // CPed::m_pVehicle
+static const int kOffPedIntel = 0x538;       // CPed::m_pIntelligence
+static const int kOffScanner = 0x190;        // CPedIntelligence: vehicle scanner, 16 pointers, nearest first
+static const int kOffPedFlags = 0x58C;       // CPed: flag word, bits 27..28 = "can't be knocked off bike" (0 default, 1 never)
+static const int kOffArea = 0x4B;            // CEntity: area / interior code (byte)
+static const int kOffEntFlags = 0x28;        // CEntity: flag word, bit 7 = visible
+static const int kOffModelIdx = 0x32;        // CEntity: model index (short)
+static const int kOffVFlags = 0x568;         // CVehicle: 64-bit flag word
+static const int kOffDriver = 0x5A0;         // CVehicle::m_pDriver
+static const int kOffMaxPass = 0x5EC;        // CVehicle::m_nMaxPassengers (byte)
+static const int kOffVHealth = 0x634;        // CVehicle::m_fHealth
+static const int kOffLock = 0x684;           // CVehicle::m_nDoorLock (1 = unlocked, 4 = locked)
+static const int kOffVType = 0x734;          // 6 = train
+static const int kOffVSub = 0x738;           // 0 car, 2 quad, 3 heli, 4 plane, 9 bike, 10 bmx ...
+enum { kVfEngineOn = 4, kVfComedy = 12, kVfOwned = 17, kVfSkid = 40, kVfEngineOff = 41, kVfHsTarget = 46, kVfNoParticles = 55 };   // bits of the flag word
+
+static const ScriptCmd kCmdForceLights = {0x067F, "ii"};      // FORCE_CAR_LIGHTS(car, 1 = off / 2 = on)
+static const ScriptCmd kCmdWarpDriver  = {0x036A, "ii"};      // WARP_CHAR_INTO_CAR(ped, car)
+static const ScriptCmd kCmdWarpPass    = {0x0430, "iii"};     // WARP_CHAR_INTO_CAR_AS_PASSENGER(ped, car, seat)
+static const ScriptCmd kCmdGetRoll     = {0x06BE, "iv"};      // read by Flip vehicle (the original adds 180 and writes it back)
+static const ScriptCmd kCmdSetRoll     = {0x0731, "if"};
+static const ScriptCmd kCmdCarSpeed    = {0x02E3, "iv"};      // GET_CAR_SPEED
+static const ScriptCmd kCmdSetSpeed    = {0x04BA, "if"};      // SET_CAR_FORWARD_SPEED
+static const ScriptCmd kCmdWarpOut     = {0x0362, "ifff"};    // WARP_CHAR_FROM_CAR_TO_COORD
+static const ScriptCmd kCmdDelTrain    = {0x07BD, "i"};       // DELETE_MISSION_TRAIN
+static const ScriptCmd kCmdDelCar      = {0x00A6, "i"};       // DELETE_CAR
+static const ScriptCmd kCmdCreateCar   = {0x00A5, "ifffv"};   // CREATE_CAR(model, x, y, z, &car)
+static const ScriptCmd kCmdNoLonger    = {0x01C3, "i"};       // MARK_CAR_AS_NO_LONGER_NEEDED
+
+static bool g_spawnAsDriver = false, g_spawnInAir = false;     // Vehicle > Spawn by ID
+static int  g_spawnId = 411;
+static volatile bool g_saveCfgReq = false;                     // set from the game tick, picked up by Draw() to write config.txt
+static bool g_nbWanted = false;                                // "No burn on flipped", saved in config.txt and re-applied at start
+static int  g_nbState = -1;                                    // -1 = not supported by this game build, 0 = off, 1 = on
+static int  g_lightsRef = -1, g_lightsState = 0;               // last FORCE_CAR_LIGHTS we sent (the game gives no way to read it back)
+
+static bool HaveScript() { return g_scriptFn != nullptr && g_sautils != nullptr; }
+static bool IsTrainModel(int m) { return m == 449 || m == 537 || m == 538 || m == 569 || m == 570 || m == 590; }   // tram / trains: no spawn
+
+template <typename T> static bool PokeMem(char* base, size_t off, const T& v) {       // write only where a read works
+    if (!base || !SafeMem::Readable(base + off, sizeof(T))) return false;
+    memcpy(base + off, &v, sizeof(T));
+    return true;
+}
+
+static bool PedInVehicle(char* ped) {
+    unsigned char b = 0;
+    return ped && SafeMem::Get(ped, kOffPedInVeh, b) && (b & 1);
+}
+// the vehicle the player sits in (checked, so a stale pointer never gets used)
+static char* PlayerVeh(char* ped) {
+    if (!ped || !g_findPlayerVehicle || !PedInVehicle(ped)) return nullptr;
+    char* v = (char*)g_findPlayerVehicle(-1, false);
+    if (!v || !SafeMem::Readable(v, 64) || !SafeMem::Readable(v + kOffVSub, 8)) return nullptr;
+    return v;
+}
+// closest vehicle the ped's scanner knows about (Util::GetClosestCar): first entry that is not fading out
+static char* NearestVehicle(char* ped) {
+    char* intel = nullptr;
+    if (!ped || !SafeMem::Get(ped, kOffPedIntel, intel) || !intel) return nullptr;
+    void* list[16];
+    if (!SafeMem::Read(intel + kOffScanner, list, sizeof(list))) return nullptr;
+    for (int i = 0; i < 16; i++) {
+        char* v = (char*)list[i];
+        if (!v) continue;
+        unsigned char fl = 0;
+        if (!SafeMem::Get(v, 0x56A, fl)) continue;
+        if (!(fl & 4) && SafeMem::Readable(v + kOffVSub, 8)) return v;
+    }
+    return nullptr;
+}
+// model name such as "copcarvg" (char[24] at +0xC of the model info)
+static void ModelName(int id, char* out, size_t cap) {
+    if (cap == 0) return;
+    out[0] = 0;
+    if (!g_getModelInfo || cap < 25 || id < 0 || id > 19999) return;
+    char* mi = (char*)g_getModelInfo(id);
+    char raw[24];
+    if (!mi || !SafeMem::Read(mi + 0xC, raw, sizeof(raw))) return;
+    size_t n = 0;
+    for (; n < 23 && raw[n]; n++) out[n] = (raw[n] >= 32 && raw[n] < 127) ? raw[n] : '?';
+    out[n] = 0;
+}
+
+// ---- "No burn on flipped": the original NOPs two stores to the vehicle health (libGTASA + 0x671A10 and + 0x4EE010).
+// Only patched when the bytes there are exactly what the original menu expects, so another game build is left alone.
+static const uintptr_t kNoBurnOff[2] = {0x671A10, 0x4EE010};
+static const unsigned int kNoBurnOrig[2] = {0xBD063660u, 0xBD063540u};   // str s0, [x19, #0x634] / str s0, [x10, #0x634]
+static const unsigned int kArmNop = 0xD503201Fu;
+static uintptr_t GameBase() { static uintptr_t b = 0; if (!b && aml) b = aml->GetLib("libGTASA.so"); return b; }
+static int NoBurnState() {
+    const uintptr_t base = GameBase();
+    if (!base) return -1;
+    int nop = 0;
+    for (int i = 0; i < 2; i++) {
+        unsigned int v = 0;
+        if (!SafeMem::Get((const void*)(base + kNoBurnOff[i]), 0, v)) return -1;
+        if (v == kArmNop) nop++; else if (v != kNoBurnOrig[i]) return -1;
+    }
+    return nop == 2 ? 1 : 0;
+}
+static bool ApplyNoBurn(bool on) {
+    if (NoBurnState() < 0) { Diag::Crumb("no-burn: unsupported game build, nothing patched"); return false; }
+    const uintptr_t base = GameBase();
+    for (int i = 0; i < 2; i++) {
+        const unsigned int want = on ? kArmNop : kNoBurnOrig[i];
+        aml->Write(base + kNoBurnOff[i], (uintptr_t)&want, sizeof(want));
+    }
+    g_nbState = on ? 1 : 0;
+    Diag::Crumb("no-burn: %s", on ? "on" : "off");
+    return true;
+}
+
+// ---- actions (all run inside the game tick; each one looks the vehicle up again instead of trusting the UI's copy)
+static void DoFixVehicle() {
+    char* v = PlayerVeh(PlayerPed());
+    if (!v) return;
+    int sub = -1;
+    SafeMem::Get(v, kOffVSub, sub);
+    Diag::Crumb("fix vehicle (class %d)", sub);
+    void (*fn)(void*) = nullptr;
+    switch (sub) {
+        case 0: fn = g_fixAuto; break;
+        case 2: fn = g_fixQuad; break;
+        case 3: fn = g_fixHeli; break;
+        case 4: fn = g_fixPlane; break;
+        case 9: fn = g_fixBike; break;
+        default: break;
+    }
+    if (fn) fn(v);
+    PokeMem(v, kOffVHealth, 1000.f);                    // the original also resets the health to 1000
+    Diag::Crumb("  done");
+    Toast(Tr("Vehicle fixed"));
+}
+
+static void DoFlipVehicle() {
+    char* v = PlayerVeh(PlayerPed());
+    if (!v) return;
+    if (!HaveScript() || !g_getVehicleRef) { Toast(Tr("Needs the SAUtils mod")); return; }
+    const int ref = g_getVehicleRef(v);
+    Diag::Crumb("flip vehicle (handle %d)", ref);
+    ScriptOut o;
+    g_scriptFn(g_sautils, &kCmdGetRoll, ref, &o.raw);
+    const float a = o.asFloat();
+    if (!Finite(a) || fabsf(a) > 100000.f) { Diag::Crumb("  bad value, flip aborted"); return; }
+    g_scriptFn(g_sautils, &kCmdSetRoll, ref, (double)(a + 180.f));
+    Diag::Crumb("  done");
+    Toast(Tr("Vehicle flipped"));
+}
+
+static void DoVehBit(int bit, bool on) {
+    char* v = PlayerVeh(PlayerPed());
+    unsigned long long f = 0;
+    if (!v || !SafeMem::Get(v, kOffVFlags, f)) return;
+    const unsigned long long m = 1ull << bit;
+    f = on ? (f | m) : (f & ~m);
+    PokeMem(v, kOffVFlags, f);
+}
+static void DoVehEngine(bool on) {                      // engine on = bit 4 set and bit 41 clear (the original writes both)
+    char* v = PlayerVeh(PlayerPed());
+    unsigned long long f = 0;
+    if (!v || !SafeMem::Get(v, kOffVFlags, f)) return;
+    f &= ~((1ull << kVfEngineOn) | (1ull << kVfEngineOff));
+    f |= on ? (1ull << kVfEngineOn) : (1ull << kVfEngineOff);
+    PokeMem(v, kOffVFlags, f);
+}
+static void DoVehInvisible(bool invisible) {            // entity flag bit 7 = "is visible"
+    char* v = PlayerVeh(PlayerPed());
+    unsigned int e = 0;
+    if (!v || !SafeMem::Get(v, kOffEntFlags, e)) return;
+    e = invisible ? (e & ~0x80u) : (e | 0x80u);
+    PokeMem(v, kOffEntFlags, e);
+}
+static void DoVehLock(bool locked) {
+    char* v = PlayerVeh(PlayerPed());
+    if (v) PokeMem(v, kOffLock, locked ? 4 : 1);
+}
+static void DoVehLights(bool on) {
+    char* v = PlayerVeh(PlayerPed());
+    if (!v || !HaveScript() || !g_getVehicleRef) return;
+    const int ref = g_getVehicleRef(v);
+    Diag::Crumb("vehicle lights %s (handle %d)", on ? "on" : "off", ref);
+    g_scriptFn(g_sautils, &kCmdForceLights, ref, on ? 2 : 1);
+}
+static void DoStayBike(bool on) {                       // bits 27..28 of the ped flag word: 1 = never knocked off, 0 = game default
+    char* ped = PlayerPed();
+    unsigned long long f = 0;
+    if (!ped || !SafeMem::Get(ped, kOffPedFlags, f)) return;
+    f &= ~(3ull << 27);
+    if (on) f |= (1ull << 27);
+    PokeMem(ped, kOffPedFlags, f);
+}
+
+// Seats: Driver (seat < 0) or passenger seat number.  Works for the vehicle the player sits in (switch seats) or the nearest one.
+static void DoSeat(int seat) {
+    char* ped = PlayerPed();
+    if (!ped) return;
+    if (g_pedAlive && !g_pedAlive(ped)) return;
+    if (!HaveScript() || !g_getPedRef || !g_getVehicleRef) { Toast(Tr("Needs the SAUtils mod")); return; }
+    char* v = PlayerVeh(ped);
+    if (!v) v = NearestVehicle(ped);
+    if (!v) { Toast(Tr("No vehicles around")); return; }
+    unsigned char mp = 0;
+    SafeMem::Get(v, kOffMaxPass, mp);
+    if (seat >= (int)mp) return;
+    const int pedRef = g_getPedRef(ped), vehRef = g_getVehicleRef(v);
+    if (pedRef <= 0 || vehRef <= 0) { Diag::Crumb("seat: no handles (ped %d, vehicle %d)", pedRef, vehRef); return; }
+    Diag::Crumb("seat %d (ped %d, vehicle %d)", seat, pedRef, vehRef);
+    if (seat < 0) g_scriptFn(g_sautils, &kCmdWarpDriver, pedRef, vehRef);
+    else          g_scriptFn(g_sautils, &kCmdWarpPass, pedRef, vehRef, seat);
+    Diag::Crumb("  done");
+}
+
+// Spawn by model ID, same steps as the original's VehiclePage::SpawnVehicle:
+//  - "As driver": the car appears at the player (a car the player sits in is replaced, its speed is kept) and the player is warped in.
+//    "In Air" puts planes/helis at 400 m (only used together with As driver, like the original).
+//  - otherwise the car appears 5 units in front of the player, turned sideways.
+static void DoSpawnById(int model) {
+    if (model < 400 || model > 611 || IsTrainModel(model)) return;
+    char* ped = PlayerPed();
+    if (!ped || !g_requestModel || !g_loadModels || !g_getHeading || !g_setHeading) return;
+    if (g_pedAlive && !g_pedAlive(ped)) return;
+    if (!HaveScript() || !g_getPedRef || !g_getVehicleRef || !g_getVehicle) { Toast(Tr("Needs the SAUtils mod")); return; }
+    const bool asDriver = g_spawnAsDriver, inAir = g_spawnInAir;
+    const int pedRef = g_getPedRef(ped);
+    float p[3];
+    if (pedRef <= 0 || !EntityPos(ped, p)) { Diag::Crumb("spawn: no ped handle / position"); return; }
+    unsigned char area = 0;
+    SafeMem::Get(ped, kOffArea, area);
+    Diag::Crumb("spawn model %d (as driver %d, in air %d)", model, asDriver ? 1 : 0, inAir ? 1 : 0);
+
+    ScriptOut speed;                                      // speed of the replaced car, passed on to the new one
+    if (asDriver && PedInVehicle(ped)) {
+        char* old = nullptr;
+        float op[3];
+        if (SafeMem::Get(ped, kOffPedVeh, old) && old && EntityPos(old, op)) {
+            const int oldRef = g_getVehicleRef(old);
+            int type = -1;
+            SafeMem::Get(old, kOffVType, type);
+            if (oldRef > 0) {
+                Diag::Crumb("  step 1: replace the vehicle the player sits in (handle %d)", oldRef);
+                g_scriptFn(g_sautils, &kCmdCarSpeed, oldRef, &speed.raw);
+                p[0] = op[0]; p[1] = op[1]; p[2] = op[2];
+                g_scriptFn(g_sautils, &kCmdWarpOut, pedRef, (double)op[0], (double)op[1], (double)op[2]);
+                g_scriptFn(g_sautils, type == 6 ? &kCmdDelTrain : &kCmdDelCar, oldRef);
+            }
+        }
+    }
+
+    float z = p[2];
+    if (area == 0) {                                      // open world only (the original skips this inside interiors)
+        if (inAir && ((g_isHeliModel && g_isHeliModel(model)) || (g_isPlaneModel && g_isPlaneModel(model)))) z = 400.f;
+        else z -= 5.f;
+    }
+    Diag::Crumb("  step 2: load model");
+    g_requestModel(model, 0x10);
+    g_loadModels(false);
+
+    const float heading = g_getHeading(ped);
+    float sx, sy, sz;
+    if (asDriver) { sx = p[0]; sy = p[1]; sz = z + 4.f; }
+    else          { sx = p[0] - sinf(heading) * 5.f; sy = p[1] + cosf(heading) * 5.f; sz = p[2]; }
+    Diag::Crumb("  step 3: create at %.1f %.1f %.1f", sx, sy, sz);
+    ScriptOut oh;
+    oh.raw = 0xFFFFFFFFull;
+    g_scriptFn(g_sautils, &kCmdCreateCar, model, (double)sx, (double)sy, (double)sz, &oh.raw);
+    const int handle = oh.asInt();
+    char* nv = (handle > 0) ? (char*)g_getVehicle(handle) : nullptr;
+    if (!nv || !SafeMem::Readable(nv, 64) || !SafeMem::Readable(nv + kOffLock, 8)) {
+        Diag::Crumb("  create failed (handle %d)", handle);
+        Toast(Tr("Could not spawn"));
+        return;
+    }
+    if (asDriver) {
+        g_setHeading(nv, heading);
+        Diag::Crumb("  step 4: warp player in (handle %d)", handle);
+        g_scriptFn(g_sautils, &kCmdWarpDriver, pedRef, handle);
+        const float sp = speed.asFloat();
+        if (Finite(sp) && sp != 0.f) g_scriptFn(g_sautils, &kCmdSetSpeed, handle, (double)sp);
+    } else {
+        g_setHeading(nv, heading + 1.5707964f);
+    }
+    PokeMem(nv, kOffLock, 1);                             // unlocked
+    PokeMem(nv, kOffArea, area);                          // same interior as the player
+    g_scriptFn(g_sautils, &kCmdNoLonger, handle);
+    if (g_setModelDeletable) g_setModelDeletable(model);
+    unsigned long long f = 0;
+    if (SafeMem::Get(nv, kOffVFlags, f)) PokeMem(nv, kOffVFlags, f | (1ull << kVfOwned));   // owned by the player: never despawns on its own
+    Diag::Crumb("  done");
+    char nm[32];
+    ModelName(model, nm, sizeof(nm));
+    Toast(nm[0] ? nm : Tr("Spawn"));
+}
+
 // ============================================================ action queue
 // The UI never touches the game directly; it queues actions that run inside the game's update tick.
-enum { aCheat = 0, aVehicle, aClock, aWanted, aHealth, aArmour, aMoney, aTimeScale, aClockHM, aDay, aDayLen, aWeather, aTopDown, aTopZoom, aTeleport, aGiveWeapon, aClearWeapons, aFlag, aDropWeapon, aRemoveCurrent };
+enum { aCheat = 0, aVehicle, aClock, aWanted, aHealth, aArmour, aMoney, aTimeScale, aClockHM, aDay, aDayLen, aWeather, aTopDown, aTopZoom, aTeleport, aGiveWeapon, aClearWeapons, aFlag, aDropWeapon, aRemoveCurrent,
+       aFixVeh, aFlipVeh, aVehBit, aVehEngine, aVehInvisible, aVehLock, aVehLights, aNoBurn, aStayBike, aPerfect, aDensity, aSeat, aSpawnId };
 struct Act { int kind; int i; float f; float g; };
 static const int kQueueSize = 32;
 static Act g_queue[kQueueSize];
@@ -686,6 +985,19 @@ static void RunQueued(bool gameIsRunning) {
             case aDropWeapon: DoDropWeapon(); break;
             case aRemoveCurrent: DoRemoveCurrent(); break;
             case aFlag: if (a.i >= 0 && a.i < kNumVis && g_visPtr[a.i]) *g_visPtr[a.i] = (a.f != 0.f) ? 1 : 0; break;
+            case aFixVeh: DoFixVehicle(); break;
+            case aFlipVeh: DoFlipVehicle(); break;
+            case aVehBit: if (a.i >= 0 && a.i < 64) DoVehBit(a.i, a.f != 0.f); break;
+            case aVehEngine: DoVehEngine(a.f != 0.f); break;
+            case aVehInvisible: DoVehInvisible(a.f != 0.f); break;
+            case aVehLock: DoVehLock(a.f != 0.f); break;
+            case aVehLights: DoVehLights(a.f != 0.f); break;
+            case aNoBurn: g_nbWanted = (a.f != 0.f); ApplyNoBurn(g_nbWanted); g_saveCfgReq = true; break;
+            case aStayBike: DoStayBike(a.f != 0.f); break;
+            case aPerfect: if (g_cheatOn && g_perfectIdx >= 0) g_cheatOn[g_perfectIdx] = (a.f != 0.f) ? 1 : 0; break;
+            case aDensity: if (g_pCarDensity) *g_pCarDensity = Clamp(a.f, 0.f, 10.f); break;
+            case aSeat: DoSeat(a.i); break;
+            case aSpawnId: DoSpawnById(a.i); break;
             case aTeleport:
                 DoTeleport(a.f, a.g);
                 __atomic_store_n(&g_tpPending, 0, __ATOMIC_RELEASE);
@@ -872,8 +1184,8 @@ static void LoadConfig() {
         snprintf(path, sizeof(path), "%s/config.txt", kCfgDirs[i]);
         FILE* f = fopen(path, "r");
         if (!f) continue;
-        float fx, fy, a, s; int fade, lock = 0, lang = 0, ovf = 0, ovp = 1, ovc = 0;
-        if (fscanf(f, "%f %f %f %f %d %d %d %d %d %d", &fx, &fy, &a, &s, &fade, &lock, &lang, &ovf, &ovp, &ovc) >= 5) {
+        float fx, fy, a, s; int fade, lock = 0, lang = 0, ovf = 0, ovp = 1, ovc = 0, nb = 0;
+        if (fscanf(f, "%f %f %f %f %d %d %d %d %d %d %d", &fx, &fy, &a, &s, &fade, &lock, &lang, &ovf, &ovp, &ovc, &nb) >= 5) {
             g_cfgFx = Clamp(fx, 0.f, 1.f); g_cfgFy = Clamp(fy, 0.f, 1.f);
             g_btnAlpha = Clamp(a, 0.15f, 1.f); g_btnScale = Clamp(s, 0.7f, 1.5f);
             g_fadeIdle = fade != 0;
@@ -881,6 +1193,7 @@ static void LoadConfig() {
             g_lang = (lang == 1 && g_thaiOk) ? 1 : 0;
             g_ovFps = (ovf & 1) != 0; g_ovCoords = (ovf & 2) != 0; g_ovPlay = (ovf & 4) != 0; g_ovNoBg = (ovf & 8) != 0; g_ovRgb = (ovf & 16) != 0;
             g_ovPos = (int)Clamp((float)ovp, 0.f, 4.f); g_ovColor = (int)Clamp((float)ovc, 0.f, 5.f);
+            g_nbWanted = nb != 0;                     // Vehicle > No burn on flipped (applied by BootVehicle)
         }
         fclose(f);
         return;
@@ -895,7 +1208,7 @@ static void SaveConfig(float W, float H) {
         FILE* f = fopen(path, "w");
         if (!f) continue;
         const int ovf = (g_ovFps ? 1 : 0) | (g_ovCoords ? 2 : 0) | (g_ovPlay ? 4 : 0) | (g_ovNoBg ? 8 : 0) | (g_ovRgb ? 16 : 0);
-        fprintf(f, "%.5f %.5f %.3f %.3f %d %d %d %d %d %d\n", g_fabX / W, g_fabY / H, g_btnAlpha, g_btnScale, g_fadeIdle ? 1 : 0, g_lockPos ? 1 : 0, g_lang, ovf, g_ovPos, g_ovColor);
+        fprintf(f, "%.5f %.5f %.3f %.3f %d %d %d %d %d %d %d\n", g_fabX / W, g_fabY / H, g_btnAlpha, g_btnScale, g_fadeIdle ? 1 : 0, g_lockPos ? 1 : 0, g_lang, ovf, g_ovPos, g_ovColor, g_nbWanted ? 1 : 0);
         fclose(f);
         return;
     }
@@ -933,6 +1246,21 @@ static const TrPair kTr[] = {
     {"Drop current weapon", "ทิ้งอาวุธที่ถืออยู่"}, {"Remove current weapon", "ถอดอาวุธที่ถืออยู่"}, {"You have no weapons", "ยังไม่มีอาวุธ"},
     {"Weapon dropped", "ทิ้งอาวุธแล้ว"}, {"Drop needs the SAUtils mod", "การทิ้งอาวุธต้องใช้ม็อด SAUtils"}, {"Could not drop here", "ทิ้งตรงนี้ไม่ได้"},
     {"Get out of the vehicle first", "ลงจากรถก่อน"},
+    {"Vehicle tools", "เครื่องมือรถ"}, {"Vehicle options", "ตัวเลือกรถ"}, {"Traffic", "การจราจร"}, {"Vehicle list", "รายการรถ"},
+    {"Fix vehicle", "ซ่อมรถ"}, {"Flip vehicle", "พลิกรถ"}, {"Vehicle fixed", "ซ่อมรถแล้ว"}, {"Vehicle flipped", "พลิกรถแล้ว"},
+    {"No burn on flipped", "รถคว่ำไม่ไหม้เอง"}, {"Stay on bike", "ไม่ตกจากมอเตอร์ไซค์"}, {"Perfect handling", "การควบคุมสมบูรณ์แบบ"},
+    {"Always Skidmarks", "มีรอยล้อตลอด"}, {"Engine State", "เครื่องยนต์"}, {"No Particles", "ไม่มีอนุภาค"}, {"Comedy Control", "ควบคุมแบบตลก"},
+    {"HS Targetted", "ถูกขีปนาวุธนำวิถีล็อกเป้า"}, {"Invisible Car", "รถล่องหน"}, {"Lights State", "ไฟรถ"}, {"Lock Door", "ล็อกประตู"},
+    {"Recommend to enable Stay on bike", "แนะนำให้เปิด \"ไม่ตกจากมอเตอร์ไซค์\" ด้วย"},
+    {"Get in a vehicle first", "ขึ้นรถก่อน"}, {"Driver seat only", "ใช้ได้เฉพาะตอนเป็นคนขับ"},
+    {"Flip needs the SAUtils mod", "การพลิกรถต้องใช้ม็อด SAUtils"}, {"Needs the SAUtils mod", "ต้องใช้ม็อด SAUtils"},
+    {"Not supported by this game build", "เกมเวอร์ชันนี้ไม่รองรับ"},
+    {"Vehicle Density Multiplier", "ตัวคูณความหนาแน่นรถ"},
+    {"Switch seats", "สลับที่นั่ง"}, {"Enter near vehicle", "ขึ้นรถที่อยู่ใกล้ตัว"}, {"Driver", "คนขับ"}, {"Passenger", "ผู้โดยสาร"},
+    {"Seats: %d", "ที่นั่ง: %d"}, {"No vehicles around", "ไม่มีรถอยู่รอบตัว"},
+    {"Spawn by ID", "เสกรถตามเลข ID"}, {"As driver", "เสกแบบเป็นคนขับ"}, {"In Air", "กลางอากาศ"},
+    {"For planes/helis (needs As driver)", "สำหรับเครื่องบิน/เฮลิคอปเตอร์ (ต้องเปิดเป็นคนขับด้วย)"},
+    {"Model Name: %s", "ชื่อรุ่น: %s"}, {"Model ID", "เลขรุ่น (ID)"}, {"Spawn", "เสก"}, {"Could not spawn", "เสกไม่สำเร็จ"},
     {"Weapon", "อาวุธ"}, {"Visual", "ภาพ"}, {"Ammo", "กระสุน"}, {"Remove all weapons", "ถอดอาวุธทั้งหมด"}, {"Weapon given", "ให้อาวุธแล้ว"},
     {"Melee", "อาวุธระยะประชิด"}, {"Handguns", "ปืนพก"}, {"Shotguns", "ปืนลูกซอง"}, {"Submachine guns", "ปืนกลมือ"}, {"Rifles", "ปืนยาว"},
     {"Heavy weapons", "อาวุธหนัก"}, {"Thrown", "อาวุธขว้าง"}, {"Gear", "อุปกรณ์"},
@@ -954,7 +1282,6 @@ static const TrPair kTr[] = {
     {"No waypoint on the map", "ยังไม่ได้ปักจุดหมายบนแผนที่"}, {"Teleport to waypoint", "วาร์ปไปจุดหมาย"},
     {"Teleport underwater", "วาร์ปลงใต้น้ำ"}, {"Teleporting...", "กำลังวาร์ป..."},
     {"Can't teleport in this vehicle", "วาร์ปในยานพาหนะนี้ไม่ได้ (ลงจากรถก่อน)"},
-    {"Fix current vehicle", "ซ่อมยานพาหนะ"}, {"Get in a vehicle first", "ขึ้นยานพาหนะก่อน"}, {"Can't fix this vehicle", "ซ่อมยานพาหนะนี้ไม่ได้"}, {"Vehicle fixed", "ซ่อมแล้ว"},
     {"Coordinates", "พิกัด"}, {"Use current position", "ใช้ตำแหน่งปัจจุบัน"}, {"Places", "สถานที่"},
     {"My spots", "จุดของฉัน"}, {"Empty", "ว่าง"}, {"Save here", "บันทึกตรงนี้"},
     {"Grove Street", "ถนนโกรฟ"}, {"Los Santos Airport", "สนามบินลอสซานโตส"}, {"Santa Maria Beach", "หาดซานตามาเรีย"},
@@ -1146,6 +1473,12 @@ static void SaveSpots() {
     }
 }
 
+// called once by main.cpp after the config is loaded: re-apply "No burn on flipped" when it was left on
+static void BootVehicle() {
+    g_nbState = NoBurnState();
+    if (g_nbWanted) { if (!ApplyNoBurn(true)) g_nbWanted = false; }
+}
+
 static void Init(float scale) {
     g_sc = scale;
     g_slop = fmaxf(40.f, 48.f * scale);
@@ -1163,6 +1496,7 @@ static void Init(float scale) {
     st.Colors[ImGuiCol_ScrollbarGrab] = ImVec4(1, 1, 1, 0.22f);
     g_expanded[0] = true;        // first cheat group
     g_expanded[20] = true;       // first vehicle section
+    g_expanded[25] = g_expanded[26] = true;                    // Vehicle: tools, options
     g_expanded[30] = g_expanded[31] = g_expanded[32] = true;   // Game: switches, speed, time
     g_expanded[36] = g_expanded[37] = true;                    // Teleport: waypoint, coordinates
 }
@@ -1274,37 +1608,6 @@ static void PagePlayer() {
     ImGui::Dummy(ImVec2(1.f, 90.f * sc));
 }
 
-static void PageVehicle() {
-    const float sc = g_sc;
-    if (Btn(Tr("Fix current vehicle"), ImVec2(RowWidth(), 96.f * sc), 1999, kBtnCol,
-            g_canRun && (g_autoFix || g_bikeFix || g_heliFix || g_planeFix || g_quadFix))) {
-        DoFixVehicle();
-    }
-    ImGui::Spacing();
-    const float sp = ImGui::GetStyle().ItemSpacing.x;
-    const float colW = (RowWidth() - sp * 2.f) / 3.f;
-    const char* lastSec = nullptr;
-    int secIdx = -1, n = 0;
-    bool open = true;
-    for (int i = 0; i < kNumVeh; i++) {
-        const Veh& v = kVeh[i];
-        if (!lastSec || strcmp(v.section, lastSec) != 0) {
-            lastSec = v.section; secIdx++; n = 0;
-            int count = 0; for (int j = i; j < kNumVeh && !strcmp(kVeh[j].section, v.section); j++) count++;
-            open = g_expanded[20 + secIdx];
-            if (Header(Tr(v.section), count, 320 + secIdx, open)) g_expanded[20 + secIdx] = !g_expanded[20 + secIdx];
-        }
-        if (!open) continue;
-        if (n % 3) ImGui::SameLine();
-        if (Btn(v.label, ImVec2(colW, 96.f * sc), 2000 + i, kBtnCol, g_vehicleCheat != nullptr)) {
-            if (!g_canRun) Toast(Tr("Start playing first"));
-            else { Enqueue(aVehicle, v.model); Toast(v.label); }
-        }
-        n++;
-    }
-    ImGui::Dummy(ImVec2(1.f, 90.f * sc));
-}
-
 // a toggle row with an ON/OFF badge
 static bool ToggleRow(const char* label, int id, bool on, bool enabled = true) {
     return Btn(label, ImVec2(RowWidth(), 96.f * g_sc), id, kBtnCol, enabled, on ? Tr("ON") : Tr("OFF"), on);
@@ -1325,6 +1628,223 @@ static int ChipRow(const char* const* labels, int n, int idBase, int selected, b
 static bool Section(const char* label, int expIdx, int id) {
     if (Header(label, 0, id, g_expanded[expIdx])) g_expanded[expIdx] = !g_expanded[expIdx];
     return g_expanded[expIdx];
+}
+
+// ===================================================================== Vehicle tab
+// Tools, switches, traffic density, seats, spawn by ID, and below them the one-tap list of 88 vehicles.
+// Layout and behaviour follow the original ARM menu's Vehicle page; every value shown is read through SafeMem (10 times a second).
+// ---- what the Vehicle tab shows, refreshed 10 times a second (the game is only read through SafeMem)
+struct VehSnap {
+    bool inCar, driver, hasTarget, stayBike;
+    int sub, type, lock, maxPass, ref;
+    short model;
+    unsigned long long flags;
+    unsigned int ent;
+    char name[32];                                  // model name of the vehicle the seat buttons talk to (own or nearest)
+};
+static VehSnap g_vs;
+
+static void RefreshVeh() {
+    static double next = 0.0;
+    static int tick = 0;
+    const double t = MonoNow();
+    if (t < next) return;
+    next = t + 0.1;
+    if ((tick++ % 3) == 0) g_nbState = NoBurnState();
+    VehSnap n;
+    memset(&n, 0, sizeof(n));
+    n.sub = n.type = -1;
+    char* ped = g_canRun ? PlayerPed() : nullptr;
+    if (ped) {
+        unsigned long long pf = 0;
+        if (SafeMem::Get(ped, kOffPedFlags, pf)) n.stayBike = ((pf >> 27) & 3) == 1;
+        char* v = PlayerVeh(ped);
+        char* target = v;
+        if (v) {
+            char* drv = nullptr;
+            n.inCar = true;
+            SafeMem::Get(v, kOffDriver, drv);
+            n.driver = (drv == ped);
+            SafeMem::Get(v, kOffVSub, n.sub);
+            SafeMem::Get(v, kOffVType, n.type);
+            SafeMem::Get(v, kOffVFlags, n.flags);
+            SafeMem::Get(v, kOffEntFlags, n.ent);
+            SafeMem::Get(v, kOffLock, n.lock);
+            if (g_getVehicleRef) n.ref = g_getVehicleRef(v);
+        } else {
+            target = NearestVehicle(ped);
+        }
+        if (target) {
+            unsigned char mp = 0;
+            SafeMem::Get(target, kOffMaxPass, mp);
+            SafeMem::Get(target, kOffModelIdx, n.model);
+            n.maxPass = mp > 8 ? 8 : mp;
+            n.hasTarget = true;
+            ModelName(n.model, n.name, sizeof(n.name));
+        }
+    }
+    g_vs = n;
+}
+
+// model ID stepper: 400..611, wraps around like the original's arrow buttons
+static void StepSpawnId(int d) {
+    int id = g_spawnId + d;
+    id = 400 + (((id - 400) % 212) + 212) % 212;
+    g_spawnId = id;
+}
+
+static void PageVehicle() {
+    const float sc = g_sc, sp = ImGui::GetStyle().ItemSpacing.x;
+    const ImVec4 dim(0.55f, 0.60f, 0.70f, 1), hdr(0.45f, 0.62f, 1.f, 1.f);
+    RefreshVeh();
+    VehSnap& vs = g_vs;
+    const bool run = g_canRun;
+    const bool inCar = run && vs.inCar;
+    const bool drv = inCar && vs.driver;
+    const bool script = run && HaveScript() && g_getVehicleRef != nullptr;
+    const float hw = (RowWidth() - sp) * 0.5f;
+    char v[96];
+
+    if (!run) ImGui::TextColored(dim, "%s", Tr("Start playing to edit these values"));
+
+    // ---- tools: fix, flip and the switches that are not tied to one vehicle
+    if (Section(Tr("Vehicle tools"), 25, 330)) {
+        if (Btn(Tr("Fix vehicle"), ImVec2(hw, 96.f * sc), 2100, kBtnCol, inCar)) Enqueue(aFixVeh, 0);
+        ImGui::SameLine();
+        if (Btn(Tr("Flip vehicle"), ImVec2(hw, 96.f * sc), 2101, kBtnCol, inCar && script)) Enqueue(aFlipVeh, 0);
+        if (run && !inCar) ImGui::TextColored(dim, "%s", Tr("Get in a vehicle first"));
+        else if (inCar && !script) ImGui::TextColored(dim, "%s", Tr("Flip needs the SAUtils mod"));
+
+        const bool nb = g_nbState == 1;
+        if (ToggleRow(Tr("No burn on flipped"), 2102, nb, run && g_nbState >= 0)) { Enqueue(aNoBurn, 0, nb ? 0.f : 1.f); g_nbState = nb ? 0 : 1; }
+        if (run && g_nbState < 0) ImGui::TextColored(dim, "%s", Tr("Not supported by this game build"));
+        if (ToggleRow(Tr("Stay on bike"), 2103, vs.stayBike, run)) { Enqueue(aStayBike, 0, vs.stayBike ? 0.f : 1.f); vs.stayBike = !vs.stayBike; }
+        const bool pf = g_cheatOn && g_perfectIdx >= 0 && g_cheatOn[g_perfectIdx] != 0;
+        if (ToggleRow(Tr("Perfect handling"), 2104, pf, run && g_cheatOn && g_perfectIdx >= 0)) Enqueue(aPerfect, 0, pf ? 0.f : 1.f);
+        ImGui::Spacing();
+    }
+
+    // ---- switches for the vehicle the player drives
+    if (Section(Tr("Vehicle options"), 26, 331)) {
+        if (run && !inCar) ImGui::TextColored(dim, "%s", Tr("Get in a vehicle first"));
+        else if (inCar && !drv) ImGui::TextColored(dim, "%s", Tr("Driver seat only"));
+        const bool en = drv;
+        {   // Always Skidmarks
+            const bool on = ((vs.flags >> kVfSkid) & 1) != 0;
+            if (ToggleRow(Tr("Always Skidmarks"), 2110, on, en)) { Enqueue(aVehBit, kVfSkid, on ? 0.f : 1.f); vs.flags ^= 1ull << kVfSkid; }
+        }
+        {   // Engine State: shown as on unless the "engine off" bit is set without the "engine on" bit (as the original does)
+            const bool b4 = ((vs.flags >> kVfEngineOn) & 1) != 0, b41 = ((vs.flags >> kVfEngineOff) & 1) != 0;
+            const bool on = !(b41 && !b4);
+            if (ToggleRow(Tr("Engine State"), 2111, on, en)) {
+                Enqueue(aVehEngine, 0, on ? 0.f : 1.f);
+                vs.flags &= ~((1ull << kVfEngineOn) | (1ull << kVfEngineOff));
+                vs.flags |= on ? (1ull << kVfEngineOff) : (1ull << kVfEngineOn);
+            }
+        }
+        {   // No Particles
+            const bool on = ((vs.flags >> kVfNoParticles) & 1) != 0;
+            if (ToggleRow(Tr("No Particles"), 2112, on, en)) { Enqueue(aVehBit, kVfNoParticles, on ? 0.f : 1.f); vs.flags ^= 1ull << kVfNoParticles; }
+        }
+        if (inCar && vs.sub >= 0 && vs.sub <= 10 && (((1 << vs.sub) & 0x605) != 0)) {      // cars, quad bikes, bikes, bmx only
+            const bool on = ((vs.flags >> kVfComedy) & 1) != 0;
+            if (ToggleRow(Tr("Comedy Control"), 2113, on, en)) { Enqueue(aVehBit, kVfComedy, on ? 0.f : 1.f); vs.flags ^= 1ull << kVfComedy; }
+            ImGui::TextColored(dim, "%s", Tr("Recommend to enable Stay on bike"));
+        }
+        {   // HS Targetted
+            const bool on = ((vs.flags >> kVfHsTarget) & 1) != 0;
+            if (ToggleRow(Tr("HS Targetted"), 2114, on, en)) { Enqueue(aVehBit, kVfHsTarget, on ? 0.f : 1.f); vs.flags ^= 1ull << kVfHsTarget; }
+        }
+        {   // Invisible Car (entity flag bit 7 = visible)
+            const bool on = inCar && (vs.ent & 0x80u) == 0;
+            if (ToggleRow(Tr("Invisible Car"), 2115, on, en)) { Enqueue(aVehInvisible, 0, on ? 0.f : 1.f); vs.ent ^= 0x80u; }
+        }
+        {   // Lights State (FORCE_CAR_LIGHTS: on = 2, off = 1; the game can't be asked what it is, so the last value sent is shown)
+            const bool on = inCar && g_lightsRef == vs.ref && g_lightsState == 2;
+            if (ToggleRow(Tr("Lights State"), 2116, on, en && script)) { Enqueue(aVehLights, 0, on ? 0.f : 1.f); g_lightsRef = vs.ref; g_lightsState = on ? 1 : 2; }
+        }
+        {   // Lock Door
+            const bool on = inCar && vs.lock == 4;
+            if (ToggleRow(Tr("Lock Door"), 2117, on, en)) { Enqueue(aVehLock, 0, on ? 0.f : 1.f); vs.lock = on ? 1 : 4; }
+        }
+        ImGui::Spacing();
+    }
+
+    // ---- traffic
+    if (Section(Tr("Traffic"), 27, 332)) {
+        float d = 1.f;
+        const bool ok = run && g_pCarDensity != nullptr && SafeMem::Get(g_pCarDensity, 0, d) && Finite(d);
+        snprintf(v, sizeof(v), ok ? "%.1f" : "-", d);
+        static const char* const kPre[4] = {"0", "1", "2", "5"};
+        const int r = Stepper(Tr("Vehicle Density Multiplier"), 2120, v, "0.1", "1", kPre, 4, ok);
+        if (r == -2) Enqueue(aDensity, 0, d - 1.f); else if (r == -1) Enqueue(aDensity, 0, d - 0.1f);
+        else if (r == 1) Enqueue(aDensity, 0, d + 0.1f); else if (r == 2) Enqueue(aDensity, 0, d + 1.f);
+        else if (r >= 10) { static const float pv[4] = {0.f, 1.f, 2.f, 5.f}; Enqueue(aDensity, 0, pv[r - 10]); }
+        ImGui::Spacing();
+    }
+
+    // ---- seats: switch seats inside the vehicle the player sits in, or hop into the nearest one
+    if (Section(inCar ? Tr("Switch seats") : Tr("Enter near vehicle"), 28, 333)) {
+        if (run && !vs.hasTarget) {
+            ImGui::TextColored(dim, "%s", Tr("No vehicles around"));
+        } else if (run) {
+            const bool en = script && g_getPedRef != nullptr;
+            ImGui::TextColored(hdr, "%s", vs.name[0] ? vs.name : "?");
+            snprintf(v, sizeof(v), Tr("Seats: %d"), vs.maxPass + 1);
+            ImGui::TextColored(dim, "%s", v);
+            if (Btn(Tr("Driver"), ImVec2(hw, 96.f * sc), 2140, kBtnCol, en)) { Enqueue(aSeat, -1); Toast(Tr("Driver")); }
+            for (int k = 0; k < vs.maxPass; k++) {
+                if ((k % 2) == 0) ImGui::SameLine();       // the Driver button fills the first column
+                snprintf(v, sizeof(v), "%s %d", Tr("Passenger"), k + 1);
+                if (Btn(v, ImVec2(hw, 96.f * sc), 2141 + k, kBtnCol, en)) { Enqueue(aSeat, k); Toast(v); }
+            }
+            if (!en) ImGui::TextColored(dim, "%s", Tr("Needs the SAUtils mod"));
+        }
+        ImGui::Spacing();
+    }
+
+    // ---- spawn by model ID
+    if (Section(Tr("Spawn by ID"), 29, 334)) {
+        if (ToggleRow(Tr("As driver"), 2160, g_spawnAsDriver)) g_spawnAsDriver = !g_spawnAsDriver;
+        if (ToggleRow(Tr("In Air"), 2161, g_spawnInAir)) g_spawnInAir = !g_spawnInAir;
+        ImGui::TextColored(dim, "%s", Tr("For planes/helis (needs As driver)"));
+        char nm[32];
+        ModelName(g_spawnId, nm, sizeof(nm));
+        snprintf(v, sizeof(v), Tr("Model Name: %s"), nm[0] ? nm : "-");
+        ImGui::TextColored(hdr, "%s", v);
+        char num[16];
+        snprintf(num, sizeof(num), "%d", g_spawnId);
+        const int r = Stepper(Tr("Model ID"), 2180, num, "1", "10", nullptr, 0, true);
+        if (r == -2) StepSpawnId(-10); else if (r == -1) StepSpawnId(-1); else if (r == 1) StepSpawnId(1); else if (r == 2) StepSpawnId(10);
+        const bool okId = !IsTrainModel(g_spawnId);
+        if (Btn(Tr("Spawn"), ImVec2(RowWidth(), 100.f * sc), 2162, kAccentCol, script && okId && g_requestModel && g_getVehicle && g_getPedRef)) Enqueue(aSpawnId, g_spawnId);
+        if (!script && run) ImGui::TextColored(dim, "%s", Tr("Needs the SAUtils mod"));
+        ImGui::Spacing();
+    }
+
+    // ---- the one-tap list
+    ImGui::TextColored(hdr, "%s", Tr("Vehicle list"));
+    const float colW = (RowWidth() - sp * 2.f) / 3.f;
+    const char* lastSec = nullptr;
+    int secIdx = -1, n = 0;
+    bool open = true;
+    for (int i = 0; i < kNumVeh; i++) {
+        const Veh& vh = kVeh[i];
+        if (!lastSec || strcmp(vh.section, lastSec) != 0) {
+            lastSec = vh.section; secIdx++; n = 0;
+            int count = 0; for (int j = i; j < kNumVeh && !strcmp(kVeh[j].section, vh.section); j++) count++;
+            open = g_expanded[20 + secIdx];
+            if (Header(Tr(vh.section), count, 320 + secIdx, open)) g_expanded[20 + secIdx] = !g_expanded[20 + secIdx];
+        }
+        if (!open) continue;
+        if (n % 3) ImGui::SameLine();
+        if (Btn(vh.label, ImVec2(colW, 96.f * sc), 2000 + i, kBtnCol, g_vehicleCheat != nullptr)) {
+            if (!g_canRun) Toast(Tr("Start playing first"));
+            else { Enqueue(aVehicle, vh.model); Toast(vh.label); }
+        }
+        n++;
+    }
+    ImGui::Dummy(ImVec2(1.f, 90.f * sc));
 }
 
 static void PageGame() {
@@ -1654,7 +2174,7 @@ static void PageMenu() {
     ImGui::Spacing();
 
     ImGui::TextColored(hdr, "%s", Tr("About"));
-    ImGui::TextColored(dim, "ProMenu 0.9.4");
+    ImGui::TextColored(dim, "ProMenu 0.10.0");
     ImGui::TextColored(dim, "Radar table: %s", g_radarLayout);
     ImGui::TextColored(dim, Tr("Game state: %d    Game symbols: %d/%d"), g_dbgGameState, g_dbgFound, g_symTotal);
     ImGui::TextColored(dim, Tr("Cheat tables: %s"), CheatTablesOk() ? Tr("found") : Tr("missing"));
@@ -1694,7 +2214,7 @@ static void Draw(float W, float H, float dt) {
 
     if (g_finger >= 0 && Now() - g_lastEventT > 5.0) ResetFinger();      // lost UP event: never stay stuck
     if (g_fabTap) { g_fabTap = false; g_open = !g_open; Toast(""); }
-    if (g_saveReq) { g_saveReq = false; SaveConfig(W, H); }
+    if (g_saveReq || g_saveCfgReq) { g_saveReq = false; g_saveCfgReq = false; SaveConfig(W, H); }
     if (g_saveSpots) { g_saveSpots = false; SaveSpots(); }
 
     // ---- floating button (always on top, stays exactly where you put it) -----
