@@ -280,143 +280,6 @@ static void DoFixVehicle() {
     Toast(Tr("Vehicle fixed"));
 }
 
-// Flip the vehicle the player is in back onto its wheels.
-//
-// UNLIKE DoFixVehicle, this offset is NOT confirmed against this binary's own import table or
-// symbol list: it assumes the standard RenderWare CMatrix layout (right/up/at/pos, each a 3-float
-// axis padded to 16 bytes) sitting at the matrix pointer already read by EntityPos (header +0x18,
-// position at matrix +0x30 -- that part IS confirmed, see EntityPos above). Right = +0x00,
-// Up = +0x10, At = +0x20. This matches the layout used across the GTA SA (re3/reversed) codebase,
-// but has not been checked against THIS game build's actual memory, so treat it as best-effort:
-// it reads the matrix back after writing and bails out (no crash, just a failure toast) if the
-// write didn't stick or the vectors don't look sane. If this ever causes a crash or visibly wrong
-// orientation, that's the first place to look -- see docs/PROGRESS.md "Flip vehicle" for the offsets
-// to re-derive from a real dump.
-static void DoFlipVehicle() {
-    char* veh = g_findPlayerVehicle ? (char*)g_findPlayerVehicle(-1, true) : nullptr;
-    if (!veh) { Toast(Tr("Get in a vehicle first")); return; }
-
-    char hdr[0x20];
-    if (!SafeMem::Read(veh, hdr, sizeof(hdr))) { Toast(Tr("Can't flip this vehicle")); return; }
-    char* m = nullptr;
-    memcpy(&m, hdr + 0x18, sizeof(m));
-    if (!m) { Toast(Tr("Can't flip this vehicle")); return; }
-
-    float mat[16];                                   // right(3+1) up(3+1) at(3+1) pos(3+1), 0x40 bytes
-    if (!SafeMem::Read(m, mat, sizeof(mat))) { Toast(Tr("Can't flip this vehicle")); return; }
-    for (int i = 0; i < 12; i++) if (!Finite(mat[i])) { Toast(Tr("Can't flip this vehicle")); return; }
-
-    // Keep the car's heading (the compass direction it's pointing), just re-level it: force Up to
-    // straight world-up (0,0,1) and re-derive Right = At x Up, Right normalized, At = Up x Right.
-    // This is the same "level the car" approach used by every SA flip-fix cheat engine script.
-    float atx = mat[8], aty = mat[9];                 // At.x, At.y (ignore At.z: we're re-leveling)
-    float len = sqrtf(atx * atx + aty * aty);
-    if (len < 0.001f) { Toast(Tr("Can't flip this vehicle")); return; }
-    atx /= len; aty /= len;
-    // Up = (0,0,1); Right = At x Up = (At.y, -At.x, 0); At = Up x Right (recomputed to stay orthogonal)
-    float rx = aty, ry = -atx;
-    mat[0] = rx;   mat[1] = ry;   mat[2]  = 0.f;       // right
-    mat[4] = 0.f;  mat[5] = 0.f;  mat[6]  = 1.f;       // up
-    mat[8] = atx;  mat[9] = aty;  mat[10] = 0.f;       // at
-    mat[14] += 0.5f;                                   // nudge up slightly so it doesn't clip into the ground
-
-    // There is no SafeMem write (only read); this struct member write carries the same risk as the
-    // existing health/armour/money writes in RunQueued (aHealth/aArmour/aMoney), which also poke
-    // game memory directly with no fault guard. Kept consistent with that existing precedent.
-    memcpy(m, mat, sizeof(mat));
-    Diag::Crumb("flip vehicle (re-leveled, kept heading)");
-    Toast(Tr("Vehicle flipped"));
-}
-
-// ============================================================== debug scan
-// Finds the byte OFFSET (from the start of the current vehicle struct) of a flag the menu does
-// not know about yet, by the same "snapshot, do the thing in-game, snapshot again, diff" method
-// GameGuardian's "changed value" search uses -- just run from inside the menu, on-device, no
-// separate app. This only ever READS memory (SafeMem::Read, same fault-proof path as everywhere
-// else in this file); it never writes, so it cannot corrupt game state or crash the game the way
-// a wrong WRITE offset could. Output is a plain-text diff written to
-// Android/data/com.rockstargames.gtasa/files/ProMenu/scan_result.txt (same folder as last_action.txt).
-//
-// Workflow (same for all 8 "current vehicle" toggles the menu is missing -- skidmarks, engine
-// state, particles, comedy control, HS targeted, invisible car, lights state, lock door):
-//   1. Get in a vehicle, open Menu > Debug Scan.
-//   2. Tap "Snapshot A" (before the feature is on).
-//   3. Turn the feature on some other way (ARM CheatMenu if it's installed side by side, or
-//      whatever in-game action triggers it -- e.g. turn on headlights for "Lights state").
-//   4. Tap "Snapshot B (diff vs A)". Every byte that changed between A and B is listed with its
-//      offset, old value and new value -- most toggles show up as exactly one changed byte.
-//   5. To narrow a noisy result (several bytes changed, not just the one you want), tap
-//      "Snapshot A" again with the feature left ON, turn ONLY that feature off, then
-//      "Snapshot B": the new diff is the intersection-friendly way to confirm which offset is
-//      the real one (do it twice, keep only the offset that showed up both times).
-// Several toggles can be scanned back-to-back in one sitting: the result file is appended to
-// (each run adds a dated block), it is not overwritten.
-namespace Scan {
-static const size_t kRegionSize = 0x800;             // bytes from the vehicle struct start to scan
-static unsigned char g_snapA[kRegionSize];
-static bool g_haveA = false;
-static char g_lastResult[256] = "";                  // short summary shown in the UI
-static int g_lastDiffCount = -1;
-
-static const char* kDirs[2] = {
-    "/storage/emulated/0/Android/data/com.rockstargames.gtasa/files/ProMenu",
-    "/sdcard/Android/data/com.rockstargames.gtasa/files/ProMenu",
-};
-
-static void AppendResult(const char* text) {
-    for (int d = 0; d < 2; d++) {
-        mkdir(kDirs[d], 0777);
-        char path[256];
-        snprintf(path, sizeof(path), "%s/scan_result.txt", kDirs[d]);
-        const int fd = open(path, O_WRONLY | O_CREAT | O_APPEND, 0666);
-        if (fd < 0) continue;
-        write(fd, text, strlen(text));
-        close(fd);
-        return;
-    }
-}
-
-static bool TakeSnapshot(unsigned char* buf) {
-    char* veh = g_findPlayerVehicle ? (char*)g_findPlayerVehicle(-1, true) : nullptr;
-    if (!veh) return false;
-    return SafeMem::Read(veh, buf, kRegionSize);
-}
-
-static void DoSnapshotA() {
-    g_haveA = TakeSnapshot(g_snapA);
-    if (g_haveA) snprintf(g_lastResult, sizeof(g_lastResult), "Snapshot A taken (%zu bytes)", kRegionSize);
-    else snprintf(g_lastResult, sizeof(g_lastResult), "Snapshot A failed: get in a vehicle first");
-}
-
-static void DoSnapshotB() {
-    if (!g_haveA) { snprintf(g_lastResult, sizeof(g_lastResult), "Take Snapshot A first"); return; }
-    unsigned char snapB[kRegionSize];
-    if (!TakeSnapshot(snapB)) { snprintf(g_lastResult, sizeof(g_lastResult), "Snapshot B failed: get in a vehicle first"); return; }
-
-    char block[4096];
-    int len = 0;
-    time_t t = time(nullptr);
-    struct tm lt; localtime_r(&t, &lt);
-    len += snprintf(block + len, sizeof(block) - len, "\n=== scan %04d-%02d-%02d %02d:%02d:%02d ===\n",
-                     lt.tm_year + 1900, lt.tm_mon + 1, lt.tm_mday, lt.tm_hour, lt.tm_min, lt.tm_sec);
-
-    int n = 0;
-    for (size_t i = 0; i < kRegionSize && len < (int)sizeof(block) - 64; i++) {
-        if (g_snapA[i] == snapB[i]) continue;
-        len += snprintf(block + len, sizeof(block) - len, "+0x%03zX  %3u -> %3u  (0x%02X -> 0x%02X)\n",
-                         i, g_snapA[i], snapB[i], g_snapA[i], snapB[i]);
-        n++;
-    }
-    if (n == 0) len += snprintf(block + len, sizeof(block) - len, "(no bytes changed)\n");
-    else if (len >= (int)sizeof(block) - 64) len += snprintf(block + len, sizeof(block) - len, "...(more changes, raise kRegionSize or narrow down)\n");
-
-    AppendResult(block);
-    g_lastDiffCount = n;
-    snprintf(g_lastResult, sizeof(g_lastResult), "%d byte(s) changed -- see scan_result.txt", n);
-    Diag::Crumb("debug scan: %d byte(s) changed", n);
-}
-} // namespace Scan
-
 // ---- the map waypoint (radar blip sprite 41) -------------------------------------------------
 // CRadar::ms_RadarTrace is read as an array of 250 blips of 0x30 bytes.  The first version of this
 // code trusted that the symbol holds a POINTER to that array and dereferenced it blindly; if the
@@ -1092,11 +955,6 @@ static const TrPair kTr[] = {
     {"Teleport underwater", "วาร์ปลงใต้น้ำ"}, {"Teleporting...", "กำลังวาร์ป..."},
     {"Can't teleport in this vehicle", "วาร์ปในยานพาหนะนี้ไม่ได้ (ลงจากรถก่อน)"},
     {"Fix current vehicle", "ซ่อมยานพาหนะ"}, {"Get in a vehicle first", "ขึ้นยานพาหนะก่อน"}, {"Can't fix this vehicle", "ซ่อมยานพาหนะนี้ไม่ได้"}, {"Vehicle fixed", "ซ่อมแล้ว"},
-    {"Flip vehicle", "พลิกยานพาหนะ"}, {"Can't flip this vehicle", "พลิกยานพาหนะนี้ไม่ได้"}, {"Vehicle flipped", "พลิกแล้ว"},
-    {"Debug Scan (find missing vehicle offsets)", "สแกนหา offset ของรถที่ยังไม่รู้"},
-    {"Get in a vehicle. Snapshot A before the feature, change the\nfeature in-game, then Snapshot B. Changed bytes are saved to\nscan_result.txt in the ProMenu files folder.",
-     "ขึ้นรถก่อน แล้วกด Snapshot A ก่อนเปิดฟีเจอร์ จากนั้นเปิด/ปิด\nฟีเจอร์ในเกม แล้วกด Snapshot B ผลลัพธ์ byte ที่เปลี่ยนจะถูก\nบันทึกไว้ที่ scan_result.txt ในโฟลเดอร์ไฟล์ของ ProMenu"},
-    {"Snapshot A", "ถ่ายภาพ A"}, {"Snapshot B (diff vs A)", "ถ่ายภาพ B (เทียบกับ A)"},
     {"Coordinates", "พิกัด"}, {"Use current position", "ใช้ตำแหน่งปัจจุบัน"}, {"Places", "สถานที่"},
     {"My spots", "จุดของฉัน"}, {"Empty", "ว่าง"}, {"Save here", "บันทึกตรงนี้"},
     {"Grove Street", "ถนนโกรฟ"}, {"Los Santos Airport", "สนามบินลอสซานโตส"}, {"Santa Maria Beach", "หาดซานตามาเรีย"},
@@ -1418,15 +1276,9 @@ static void PagePlayer() {
 
 static void PageVehicle() {
     const float sc = g_sc;
-    const float sp0 = ImGui::GetStyle().ItemSpacing.x;
-    const float hw0 = (RowWidth() - sp0) * 0.5f;
-    if (Btn(Tr("Fix current vehicle"), ImVec2(hw0, 96.f * sc), 1999, kBtnCol,
+    if (Btn(Tr("Fix current vehicle"), ImVec2(RowWidth(), 96.f * sc), 1999, kBtnCol,
             g_canRun && (g_autoFix || g_bikeFix || g_heliFix || g_planeFix || g_quadFix))) {
         DoFixVehicle();
-    }
-    ImGui::SameLine();
-    if (Btn(Tr("Flip vehicle"), ImVec2(hw0, 96.f * sc), 1998, kBtnCol, g_canRun && g_findPlayerVehicle != nullptr)) {
-        DoFlipVehicle();
     }
     ImGui::Spacing();
     const float sp = ImGui::GetStyle().ItemSpacing.x;
@@ -1808,18 +1660,6 @@ static void PageMenu() {
     ImGui::TextColored(dim, Tr("Cheat tables: %s"), CheatTablesOk() ? Tr("found") : Tr("missing"));
     ImGui::TextColored(dim, Tr("Touches: %d    Taps: %d"), (int)g_dbgTouches, (int)g_dbgTaps);
     ImGui::TextColored(dim, Tr("Raw events  up: %d  down: %d  move: %d"), (int)g_dbgRaw[1], (int)g_dbgRaw[2], (int)g_dbgRaw[3]);
-    ImGui::Spacing();
-
-    if (Section(Tr("Debug Scan (find missing vehicle offsets)"), 50, 5000)) {
-        ImGui::TextColored(dim, "%s", Tr("Get in a vehicle. Snapshot A before the feature, change the\nfeature in-game, then Snapshot B. Changed bytes are saved to\nscan_result.txt in the ProMenu files folder."));
-        const bool haveVeh = g_canRun && g_findPlayerVehicle && g_findPlayerVehicle(-1, true) != nullptr;
-        const float hw2 = (wide - sp) * 0.5f;
-        if (Btn(Tr("Snapshot A"), ImVec2(hw2, btnH), 5001, kBtnCol, haveVeh)) Scan::DoSnapshotA();
-        ImGui::SameLine();
-        if (Btn(Tr("Snapshot B (diff vs A)"), ImVec2(hw2, btnH), 5002, kBtnCol, haveVeh && Scan::g_haveA)) Scan::DoSnapshotB();
-        if (!haveVeh) ImGui::TextColored(dim, "%s", Tr("Get in a vehicle first"));
-        if (Scan::g_lastResult[0]) ImGui::TextColored(hdr, "%s", Scan::g_lastResult);
-    }
     ImGui::Dummy(ImVec2(1.f, 60.f * sc));
 }
 
