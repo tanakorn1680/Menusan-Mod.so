@@ -143,9 +143,7 @@ static void* (*g_getVehicle)(int) = nullptr;        // CPools::GetVehicle(handle
 static void  (*g_setModelDeletable)(int) = nullptr; // CStreaming::SetModelIsDeletable(model)
 static bool  (*g_isHeliModel)(int) = nullptr;       // CModelInfo::IsHeliModel
 static bool  (*g_isPlaneModel)(int) = nullptr;      // CModelInfo::IsPlaneModel
-static void* (*g_getModelInfo)(int) = nullptr;      // CModelInfo::GetModelInfo(id)   (model name = char[24] at +0xC)
-static float (*g_getHeading)(void*) = nullptr;      // CPlaceable::GetHeading
-static void  (*g_setHeading)(void*, float) = nullptr;   // CPlaceable::SetHeading
+static void** g_modelInfoPtrs = nullptr;            // CModelInfo::ms_modelInfoPtrs (array; model name = char[24] at +0xC of an entry)
 static float* g_pCarDensity = nullptr;              // CCarCtrl::CarDensityMultiplier
 static int g_perfectIdx = -1;                       // index of STRONGGRIP ("Perfect handling") in the cheat list
 static int g_symTotal = 0;                          // how many game symbols ResolveGame looked for
@@ -175,15 +173,16 @@ static int ResolveGame(uintptr_t (*lookup)(const char*)) {
     Res(lookup, g_pCurrentDay, "_ZN6CClock10CurrentDayE", found);
     Res(lookup, g_pGodFlag, "_ZN10CPlayerPed22bDebugPlayerInvincibleE", found);
     Res(lookup, g_findPlayerVehicle, "_Z17FindPlayerVehicleib", found);
-    Res(lookup, g_pedAlive, "_ZN4CPed7IsAliveEv", found);
+    Res(lookup, g_pedAlive, "_ZNK4CPed7IsAliveEv", found);
+    if (!g_pedAlive) g_pedAlive = reinterpret_cast<bool (*)(void*)>(lookup("_ZN4CPed7IsAliveEv"));
     Res(lookup, g_pedTeleport, "_ZN4CPed8TeleportE7CVectorh", found);
     Res(lookup, g_bikeTeleport, "_ZN5CBike8TeleportE7CVectorh", found);
     Res(lookup, g_autoTeleport, "_ZN11CAutomobile8TeleportE7CVectorh", found);
     Res(lookup, g_bikePlace, "_ZN5CBike19PlaceOnRoadProperlyEv", found);
     Res(lookup, g_autoPlace, "_ZN11CAutomobile19PlaceOnRoadProperlyEv", found);
     Res(lookup, g_groundZ, "_ZN6CWorld19FindGroundZForCoordEff", found);
-    Res(lookup, g_loadSceneCol, "_ZN10CStreaming18LoadSceneCollisionEPK7CVector", found);
-    Res(lookup, g_loadScene, "_ZN10CStreaming9LoadSceneEPK7CVector", found);
+    Res(lookup, g_loadSceneCol, "_ZN10CStreaming18LoadSceneCollisionERK7CVector", found);
+    Res(lookup, g_loadScene, "_ZN10CStreaming9LoadSceneERK7CVector", found);
     Res(lookup, g_loadModels, "_ZN10CStreaming22LoadAllRequestedModelsEb", found);
     Res(lookup, g_waterNoWaves, "_ZN11CWaterLevel20GetWaterLevelNoWavesEfffPfS0_S0_", found);
     Res(lookup, g_pRadarTrace, "_ZN6CRadar13ms_RadarTraceE", found);
@@ -213,9 +212,7 @@ static int ResolveGame(uintptr_t (*lookup)(const char*)) {
     Res(lookup, g_setModelDeletable, "_ZN10CStreaming19SetModelIsDeletableEi", found);
     Res(lookup, g_isHeliModel, "_ZN10CModelInfo11IsHeliModelEi", found);
     Res(lookup, g_isPlaneModel, "_ZN10CModelInfo12IsPlaneModelEi", found);
-    Res(lookup, g_getModelInfo, "_ZN10CModelInfo12GetModelInfoEi", found);
-    Res(lookup, g_getHeading, "_ZN10CPlaceable10GetHeadingEv", found);
-    Res(lookup, g_setHeading, "_ZN10CPlaceable10SetHeadingEf", found);
+    Res(lookup, g_modelInfoPtrs, "_ZN10CModelInfo16ms_modelInfoPtrsE", found);
     Res(lookup, g_pCarDensity, "_ZN8CCarCtrl20CarDensityMultiplierE", found);
     for (int i = 0; i < kNumCheats; i++) if (!strcmp(kCheat[i].name, "INVINCIBILITY")) g_godIdx = i;
     for (int i = 0; i < kNumCheats; i++) if (!strcmp(kCheat[i].name, "STRONGGRIP")) g_perfectIdx = i;
@@ -614,6 +611,7 @@ static const int kOffVType = 0x734;          // 6 = train
 static const int kOffVSub = 0x738;           // 0 car, 2 quad, 3 heli, 4 plane, 9 bike, 10 bmx ...
 enum { kVfEngineOn = 4, kVfComedy = 12, kVfOwned = 17, kVfSkid = 40, kVfEngineOff = 41, kVfHsTarget = 46, kVfNoParticles = 55 };   // bits of the flag word
 
+static const ScriptCmd kCmdSetHeading  = {0x0175, "if"};      // SET_CAR_HEADING(car, degrees)
 static const ScriptCmd kCmdDensity     = {0x01EB, "f"};       // SET_CAR_DENSITY_MULTIPLIER (fallback when the game variable can not be read)
 static const ScriptCmd kCmdForceLights = {0x067F, "ii"};      // FORCE_CAR_LIGHTS(car, 1 = off / 2 = on)
 static const ScriptCmd kCmdWarpDriver  = {0x036A, "ii"};      // WARP_CHAR_INTO_CAR(ped, car)
@@ -669,17 +667,31 @@ static char* NearestVehicle(char* ped) {
     }
     return nullptr;
 }
-// model name such as "copcarvg" (char[24] at +0xC of the model info)
+// model name such as "copcarvg" (char[24] at +0xC of the model info; the table is CModelInfo::ms_modelInfoPtrs)
 static void ModelName(int id, char* out, size_t cap) {
     if (cap == 0) return;
     out[0] = 0;
-    if (!g_getModelInfo || cap < 25 || id < 0 || id > 19999) return;
-    char* mi = (char*)g_getModelInfo(id);
+    if (!g_modelInfoPtrs || cap < 25 || id < 0 || id > 19999) return;
+    char* mi = nullptr;
     char raw[24];
-    if (!mi || !SafeMem::Read(mi + 0xC, raw, sizeof(raw))) return;
+    if (!SafeMem::Get(g_modelInfoPtrs, (size_t)id * sizeof(void*), mi) || !mi || !SafeMem::Read(mi + 0xC, raw, sizeof(raw))) return;
     size_t n = 0;
     for (; n < 23 && raw[n]; n++) out[n] = (raw[n] >= 32 && raw[n] < 127) ? raw[n] : '?';
     out[n] = 0;
+}
+// heading of an entity in radians.  The game has no CPlaceable::GetHeading to call (it is inlined), so it is worked out from the
+// matrix's forward vector (+0x10 of the matrix), or taken from the placement (+0x14) when the entity has no matrix.
+static bool EntityHeading(const char* e, float* out) {
+    const char* m = nullptr;
+    if (!SafeMem::Get(e, 0x18, m)) return false;
+    float h;
+    if (m) {
+        float f[3];
+        if (!SafeMem::Read(m + 0x10, f, sizeof(f)) || !Finite(f[0]) || !Finite(f[1])) return false;
+        h = atan2f(-f[0], f[1]);
+    } else if (!SafeMem::Get(e, 0x14, h) || !Finite(h)) return false;
+    *out = h;
+    return true;
 }
 
 // ---- "No burn on flipped": the original NOPs two stores to the vehicle health (libGTASA + 0x671A10 and + 0x4EE010).
@@ -836,7 +848,7 @@ static void DoSeat(int seat) {
 static void DoSpawnById(int model) {
     if (model < 400 || model > 611 || IsTrainModel(model)) return;
     char* ped = PlayerPed();
-    if (!ped || !g_requestModel || !g_loadModels || !g_getHeading || !g_setHeading) return;
+    if (!ped || !g_requestModel || !g_loadModels) return;
     if (g_pedAlive && !g_pedAlive(ped)) return;
     if (!HaveScript() || !g_getPedRef || !g_getVehicleRef || !g_getVehicle) { Toast(Tr("Needs the SAUtils mod")); return; }
     const bool asDriver = g_spawnAsDriver, inAir = g_spawnInAir;
@@ -874,7 +886,8 @@ static void DoSpawnById(int model) {
     g_requestModel(model, 0x10);
     g_loadModels(false);
 
-    const float heading = g_getHeading(ped);
+    float heading = 0.f;
+    if (!EntityHeading(ped, &heading)) heading = 0.f;
     float sx, sy, sz;
     if (asDriver) { sx = p[0]; sy = p[1]; sz = z + 4.f; }
     else          { sx = p[0] - sinf(heading) * 5.f; sy = p[1] + cosf(heading) * 5.f; sz = p[2]; }
@@ -890,13 +903,13 @@ static void DoSpawnById(int model) {
         return;
     }
     if (asDriver) {
-        g_setHeading(nv, heading);
+        g_scriptFn(g_sautils, &kCmdSetHeading, handle, (double)(heading * 57.29578f));
         Diag::Crumb("  step 4: warp player in (handle %d)", handle);
         g_scriptFn(g_sautils, &kCmdWarpDriver, pedRef, handle);
         const float sp = speed.asFloat();
         if (Finite(sp) && sp != 0.f) g_scriptFn(g_sautils, &kCmdSetSpeed, handle, (double)sp);
     } else {
-        g_setHeading(nv, heading + 1.5707964f);
+        g_scriptFn(g_sautils, &kCmdSetHeading, handle, (double)((heading + 1.5707964f) * 57.29578f));
     }
     PokeMem(nv, kOffLock, 1);                             // unlocked
     PokeMem(nv, kOffArea, area);                          // same interior as the player
@@ -2255,7 +2268,7 @@ static void PageMenu() {
     ImGui::Spacing();
 
     ImGui::TextColored(hdr, "%s", Tr("About"));
-    ImGui::TextColored(dim, "ProMenu 0.10.1");
+    ImGui::TextColored(dim, "ProMenu 0.10.2");
     ImGui::TextColored(dim, "Radar table: %s", g_radarLayout);
     ImGui::TextColored(dim, Tr("Game state: %d    Game symbols: %d/%d"), g_dbgGameState, g_dbgFound, g_symTotal);
     ImGui::TextColored(dim, Tr("Cheat tables: %s"), CheatTablesOk() ? Tr("found") : Tr("missing"));

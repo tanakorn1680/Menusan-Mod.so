@@ -66,7 +66,7 @@ CPed:     +0x585 bit0=อยู่ในรถ, +0x708 m_pVehicle, +0x538 intell
 CVehicle: +0x28 entity flags (บิต7 = visible), +0x32 model index (short), +0x4B area, +0x568 vehicle flags 64 บิต
           (บิต4 engine on, 12 comedy, 17 owned by player, 40 always skidmarks, 41 engine off, 46 HS targetted, 55 no particles),
           +0x5A0 driver, +0x5EC max passengers (byte), +0x634 health, +0x684 door lock (1 ปลดล็อก, 4 ล็อก), +0x734 type (6=รถไฟ), +0x738 subclass
-          (0 car, 2 quad, 3 heli, 4 plane, 9 bike, 10 bmx)  ชื่อรุ่น = CModelInfo::GetModelInfo(id)+0xC (char[24])
+          (0 car, 2 quad, 3 heli, 4 plane, 9 bike, 10 bmx)  ชื่อรุ่น = CModelInfo::ms_modelInfoPtrs[id]+0xC (char[24])  (GetModelInfo(int) ไม่มีในเกม)
 สคริปต์:  067F FORCE_CAR_LIGHTS(1 ปิด/2 เปิด), 036A WARP_CHAR_INTO_CAR, 0430 ..AS_PASSENGER(ped,car,seat), 06BE/0731 อ่าน/เขียนค่าที่ Flip ใช้ (+180),
           02E3 GET_CAR_SPEED, 04BA SET_CAR_FORWARD_SPEED, 0362 WARP_CHAR_FROM_CAR_TO_COORD, 07BD DELETE_MISSION_TRAIN, 00A6 DELETE_CAR,
           00A5 CREATE_CAR, 01C3 MARK_CAR_AS_NO_LONGER_NEEDED
@@ -79,10 +79,18 @@ Perfect handling = m_aCheatsActive[ดัชนี STRONGGRIP=35] ; Stay on bike
 ------------------------------
 - Lights State: เมนูเดิมผูกกับ CVehicle::ms_forceVehicleLightsOff ซึ่งอ่านค่ากลับจริงไม่ได้ ของเรา "จำค่าที่ส่งล่าสุด" ต่อคัน
 - Stay on bike ปิด = ค่าเริ่มต้นเกม (0)
-- ตำแหน่งหน้ารถตอนเสกไม่ใช้ TransformFromObjectSpace แต่คำนวณจาก GetHeading (ข้างหน้า 5 หน่วย, หมุน +90 องศา)
+- ตำแหน่งหน้ารถตอนเสกไม่ใช้ TransformFromObjectSpace แต่คำนวณจากทิศของเมทริกซ์ entity (EntityHeading) + ตั้งทิศด้วยสคริปต์ 0175 (ข้างหน้า 5 หน่วย, หมุน +90 องศา)
 - เสก As driver แล้วอยู่ในรถ = ลบรถคันเดิมแล้วแทนที่ (เหมือนเดิม) ; In Air มีผลเฉพาะคู่กับ As driver (เหมือนเดิม)
 
 8. สิ่งที่ควรทำต่อ
 ------------------
 - ให้ผู้ใช้ทดสอบ Vehicle ในเกม ถ้าเด้งดู files/ProMenu/last_action.txt / previous_session.txt
 - ทำหมวดที่เหลือในข้อ 4 ตามลำดับที่ผู้ใช้สั่ง ใช้วิธีข้อ 5
+
+9. ไฟล์ Ghidra dump (Gtasan.zip) และสิ่งที่ตรวจแล้ว (0.10.2)
+------------------------------------------------------------
+- ผู้ใช้ให้ symbols.tsv / functions.tsv / strings.tsv ของ libGTASA.so (offset = address - 0x100000, symbols.tsv: offset type name)
+- ใช้ grep ชื่อ symbol ที่ ui.h/main.cpp/rw_backend.h อ้างถึงก่อนเพิ่มฟังก์ชันใหม่ทุกครั้ง (ชื่อที่ไม่มี = Res() ได้ null แล้วฟีเจอร์เงียบหาย)
+- แก้แล้ว: GetHeading/SetHeading, GetModelInfo, CPed::IsAlive, CStreaming::LoadScene*(ERK7CVector)
+- ยังไม่อยู่ใน libGTASA (ปกติ): TopDownCamera::* (มาจากปลั๊กอินอื่น), SAUtils ScriptCommand
+- ยังไม่ทราบสาเหตุที่ Vehicle Density Multiplier กดไม่ได้ symbol `_ZN8CCarCtrl20CarDensityMultiplierE` มีจริงใน dump (0x85ebf4) ปัญหาน่าจะอยู่ที่การอ่านค่า/UI ให้ดู crumb "traffic density" ใน last_action.txt
