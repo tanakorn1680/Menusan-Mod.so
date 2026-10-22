@@ -1,4 +1,4 @@
-# ProMenu 0.10.0
+# ProMenu 0.10.1
 
 ปุ่มวงกลมลอย + แผงเมนูแบบสัมผัส สำหรับ GTA SA Android 2.10 (arm64, AML) รอบ 0.5 เพิ่มภาษาไทย (ยังไม่เคยทดสอบในเกมจริง)
 
@@ -20,14 +20,17 @@
 - ต้องมีฟอนต์ไทย ปลั๊กอินหาเองจากโฟลเดอร์ฟอนต์ของ Android (ไฟล์ชื่อมีคำว่า Thai) หรือใช้ไฟล์ของคุณที่ `Android/data/com.rockstargames.gtasa/files/ProMenu/font_th.ttf` ถ้าไม่เจอ ปุ่มไทยจะกดไม่ได้
 - ImGui ไม่ประกอบสระ/วรรณยุกต์ซ้อนกัน บางคำอาจเห็นเครื่องหมายชิดหรือทับกันเล็กน้อย
 
-## เพิ่มใน 0.10.0 (แท็บ Vehicle)
+## 0.10.1 (จัดเมนู Vehicle ใหม่ + แก้ความหนาแน่นรถ)
+- แท็บ Vehicle แบ่งเป็น 3 หน้าย่อย: **Control** (Fix/Flip, สวิตช์แบบไทล์ 2 คอลัมน์ ไฟเขียวเมื่อเปิด, ความหนาแน่นรถ), **Seats** (Driver / Passenger), **Spawn** (As driver / In Air + รายการรถ) มีการ์ดด้านบนบอกรถที่นั่งอยู่ ตำแหน่งที่นั่ง และเลือด (หรือรถที่ใกล้สุดตอนเดินเท้า) แท็บ Visual ใช้ไทล์แบบเดียวกัน
+- เอา "Spawn by ID" ออก; **As driver / In Air** ใช้กับการแตะชื่อรถในรายการ (In Air ใช้ได้เมื่อเปิด As driver) ถ้าปิดทั้งคู่ยังใช้สูตรเสกรถของเกมเหมือนเดิม
+- **Vehicle Density Multiplier:** ใช้ตัวแปรของเกมเมื่ออ่านค่าได้สมเหตุสมผล ถ้าอ่านไม่ได้จะสั่งผ่านสคริปต์ SAUtils (SET_CAR_DENSITY_MULTIPLIER 01EB) แทน เดิมปุ่มถูกล็อกเมื่ออ่านตัวแปรไม่ได้ (ยังไม่ทราบสาเหตุแน่ชัดจนกว่าจะมีล็อก)
+
+## 0.10.0 (แท็บ Vehicle)
 ทุกฟังก์ชันถอดจากโค้ดของเมนู ARM เดิม (`VehiclePage::Draw/SpawnVehicle`, `Util::FlipCar/GetClosestCar`) ทั้งออฟเซ็ต หมายเลขคำสั่งสคริปต์ และตำแหน่งแพตช์ ยังไม่เคยทดสอบในเกมจริง
-- **Vehicle tools:** Fix vehicle (เรียก `Fix` ตามชนิดรถ + เลือด 1000), Flip vehicle (สคริปต์ผ่าน SAUtils), No burn on flipped (NOP 2 คำสั่งในเกม ตรวจไบต์ก่อนเสมอ เกมรุ่นอื่นจะไม่ถูกแตะ และจำค่าไว้ใน `config.txt`), Stay on bike, Perfect handling (ธง STRONGGRIP)
-- **Vehicle options** (ต้องเป็นคนขับ): Always Skidmarks, Engine State, No Particles, Comedy Control (เฉพาะรถยนต์/ควอด/มอเตอร์ไซค์/BMX), HS Targetted, Invisible Car, Lights State, Lock Door
-- **Traffic:** Vehicle Density Multiplier 0–10
-- **Switch seats / Enter near vehicle:** แสดงชื่อรุ่น (เช่น copcarvg) และจำนวนที่นั่ง ปุ่ม Driver / Passenger 1..N วาร์ปเข้าที่นั่งของรถคันที่นั่งอยู่หรือคันที่ใกล้สุด
-- **Spawn by ID:** As driver / In Air + เลือกเลขรุ่น 400–611 (ลูกศรวนรอบ) ปุ่ม Spawn (รถไฟ/รถราง ปิดไว้เหมือนเดิม)
-- Flip, ที่นั่ง, เสกตาม ID และ Lights State ต้องใช้ม็อด SAUtils
+- Fix vehicle, Flip vehicle, No burn on flipped (NOP 2 คำสั่งในเกม ตรวจไบต์ก่อนเสมอ และจำค่าใน `config.txt`), Stay on bike, Perfect handling (ธง STRONGGRIP)
+- สวิตช์รถ (ต้องเป็นคนขับ): Always Skidmarks, Engine State, No Particles, Comedy Control (เฉพาะรถยนต์/ควอด/มอเตอร์ไซค์/BMX), HS Targetted, Invisible Car, Lights State, Lock Door
+- Switch seats / Enter near vehicle: แสดงชื่อรุ่น (เช่น copcarvg) และจำนวนที่นั่ง ปุ่ม Driver / Passenger 1..N
+- Flip, ที่นั่ง, As driver/In Air และ Lights State ต้องใช้ม็อด SAUtils
 - รายละเอียดทางเทคนิคและงานที่เหลืออยู่ใน `PROGRESS_HANDOFF.txt`
 
 ## 0.9.3 (ตรวจหาสาเหตุที่ทิ้งอาวุธแล้วไม่มีของบนพื้น)

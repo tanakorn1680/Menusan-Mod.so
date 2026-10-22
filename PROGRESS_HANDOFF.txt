@@ -34,14 +34,18 @@ jni/*.inc         ตารางสูตร 100 ตัว, หมวด, ช�
   * แปลภาษา: ตาราง kTr[] (en->th) ผ่าน Tr("...") ข้อความที่ไม่มีในตารางแสดงอังกฤษ
   * config.txt: "fx fy alpha scale fade lock lang ovFlags ovPos ovColor noBurn" (ฟิลด์ท้ายสุดเพิ่มใน 0.10.0 ไฟล์เก่าอ่านได้)
 
-4. สถานะ ณ ตอนนี้ (v0.10.0)
+4. สถานะ ณ ตอนนี้ (v0.10.1)
 ---------------------------
 เสร็จแล้ว: Player(เลือด/เกราะ/เงิน/wanted), Vehicle(เต็ม), Weapon, Teleport, Visual(9 สวิตช์), Game, Cheats 100, Menu(ภาษา/overlay)
 Vehicle 0.10.0 (ครบตามรายการที่ผู้ใช้ขอ):
   Fix vehicle, Flip vehicle, No burn on flipped, Stay on bike, Perfect handling,
   สวิตช์ 8 ตัว (Always Skidmarks, Engine State, No Particles, Comedy Control, HS Targetted, Invisible Car, Lights State, Lock Door),
   Vehicle Density Multiplier, Switch seats / Enter near vehicle (Driver, Passenger 1..N, แสดงชื่อรุ่น+จำนวนที่นั่ง),
-  Spawn by ID (As driver / In Air, ID 400-611)
+  As driver / In Air ใช้กับการแตะชื่อรถในรายการ (DoSpawnById) ; เอา Spawn by ID ออกตามที่ผู้ใช้สั่ง
+UI 0.10.1: Vehicle แบ่ง 3 หน้าย่อย (Control/Seats/Spawn) ใช้ Tile()/TileGrid()/Caption()/VehCard() ใน ui.h (Visual ใช้ Tile ด้วย)
+  ผู้ใช้อยากได้เมนู 'กดสะดวก ไม่รก ดูมืออาชีพ' -> หน้าใหม่ควรใช้ไทล์ 2 คอลัมน์ + Caption แทนแถวเต็มความกว้าง; แท็บอื่น (Player/Game/Teleport/Weapon) ยังเป็นสไตล์เดิม
+Vehicle Density: ผู้ใช้รายงานว่ากดไม่ได้ (ปุ่มถูกล็อก) สาเหตุที่น่าสงสัยคือ symbol CCarCtrl::CarDensityMultiplier ไม่ถูก resolve/อ่านไม่ได้ ->
+  0.10.1 มี fallback สคริปต์ 01EB ผ่าน SAUtils ; ถ้ายังไม่ได้ ให้ขอ last_action.txt (มี crumb 'traffic density ... (variable|script)') และ About > Game symbols
 ยังไม่ได้ทำ (จากเมนู ARM เดิม): Scene/คัตซีน, Ped, Player ส่วนที่เหลือ, Game: ล็อกซูมกล้อง/หยุดเวลาภารกิจ/น้ำแข็งตัว/แรงโน้มถ่วง/
   Overlay ชื่อสถานที่, Visual: Keep fog on low graphic + Invisible water (ต้อง hook เอง)
   "Wheels only" มีอยู่แล้วเป็นสูตร ONLYRENDERWHEELS ในแท็บ Cheats; "Blow up cars" ก็มีในสูตร

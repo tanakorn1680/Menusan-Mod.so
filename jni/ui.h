@@ -614,6 +614,7 @@ static const int kOffVType = 0x734;          // 6 = train
 static const int kOffVSub = 0x738;           // 0 car, 2 quad, 3 heli, 4 plane, 9 bike, 10 bmx ...
 enum { kVfEngineOn = 4, kVfComedy = 12, kVfOwned = 17, kVfSkid = 40, kVfEngineOff = 41, kVfHsTarget = 46, kVfNoParticles = 55 };   // bits of the flag word
 
+static const ScriptCmd kCmdDensity     = {0x01EB, "f"};       // SET_CAR_DENSITY_MULTIPLIER (fallback when the game variable can not be read)
 static const ScriptCmd kCmdForceLights = {0x067F, "ii"};      // FORCE_CAR_LIGHTS(car, 1 = off / 2 = on)
 static const ScriptCmd kCmdWarpDriver  = {0x036A, "ii"};      // WARP_CHAR_INTO_CAR(ped, car)
 static const ScriptCmd kCmdWarpPass    = {0x0430, "iii"};     // WARP_CHAR_INTO_CAR_AS_PASSENGER(ped, car, seat)
@@ -627,8 +628,7 @@ static const ScriptCmd kCmdDelCar      = {0x00A6, "i"};       // DELETE_CAR
 static const ScriptCmd kCmdCreateCar   = {0x00A5, "ifffv"};   // CREATE_CAR(model, x, y, z, &car)
 static const ScriptCmd kCmdNoLonger    = {0x01C3, "i"};       // MARK_CAR_AS_NO_LONGER_NEEDED
 
-static bool g_spawnAsDriver = false, g_spawnInAir = false;     // Vehicle > Spawn by ID
-static int  g_spawnId = 411;
+static bool g_spawnAsDriver = false, g_spawnInAir = false;     // Vehicle > Spawn options (used by the vehicle list)
 static volatile bool g_saveCfgReq = false;                     // set from the game tick, picked up by Draw() to write config.txt
 static bool g_nbWanted = false;                                // "No burn on flipped", saved in config.txt and re-applied at start
 static int  g_nbState = -1;                                    // -1 = not supported by this game build, 0 = off, 1 = on
@@ -709,6 +709,24 @@ static bool ApplyNoBurn(bool on) {
     g_nbState = on ? 1 : 0;
     Diag::Crumb("no-burn: %s", on ? "on" : "off");
     return true;
+}
+
+// Vehicle Density Multiplier: the game variable is used when it can be found and holds a sane number, otherwise the
+// script command (needs SAUtils) with the last value we sent.
+static float g_densityShown = 1.f;
+static bool DensitySymbolOk(float* out) {
+    float d = 0.f;
+    if (!g_pCarDensity || !SafeMem::Get(g_pCarDensity, 0, d) || !Finite(d) || d < 0.f || d > 100.f) return false;
+    if (out) *out = d;
+    return true;
+}
+static void DoDensity(float v) {
+    v = Clamp(v, 0.f, 10.f);
+    if (DensitySymbolOk(nullptr)) *g_pCarDensity = v;
+    else if (HaveScript()) g_scriptFn(g_sautils, &kCmdDensity, (double)v);
+    else return;
+    g_densityShown = v;
+    Diag::Crumb("traffic density %.1f (%s)", v, DensitySymbolOk(nullptr) ? "variable" : "script");
 }
 
 // ---- actions (all run inside the game tick; each one looks the vehicle up again instead of trusting the UI's copy)
@@ -995,7 +1013,7 @@ static void RunQueued(bool gameIsRunning) {
             case aNoBurn: g_nbWanted = (a.f != 0.f); ApplyNoBurn(g_nbWanted); g_saveCfgReq = true; break;
             case aStayBike: DoStayBike(a.f != 0.f); break;
             case aPerfect: if (g_cheatOn && g_perfectIdx >= 0) g_cheatOn[g_perfectIdx] = (a.f != 0.f) ? 1 : 0; break;
-            case aDensity: if (g_pCarDensity) *g_pCarDensity = Clamp(a.f, 0.f, 10.f); break;
+            case aDensity: DoDensity(a.f); break;
             case aSeat: DoSeat(a.i); break;
             case aSpawnId: DoSpawnById(a.i); break;
             case aTeleport:
@@ -1258,9 +1276,10 @@ static const TrPair kTr[] = {
     {"Vehicle Density Multiplier", "ตัวคูณความหนาแน่นรถ"},
     {"Switch seats", "สลับที่นั่ง"}, {"Enter near vehicle", "ขึ้นรถที่อยู่ใกล้ตัว"}, {"Driver", "คนขับ"}, {"Passenger", "ผู้โดยสาร"},
     {"Seats: %d", "ที่นั่ง: %d"}, {"No vehicles around", "ไม่มีรถอยู่รอบตัว"},
-    {"Spawn by ID", "เสกรถตามเลข ID"}, {"As driver", "เสกแบบเป็นคนขับ"}, {"In Air", "กลางอากาศ"},
-    {"For planes/helis (needs As driver)", "สำหรับเครื่องบิน/เฮลิคอปเตอร์ (ต้องเปิดเป็นคนขับด้วย)"},
-    {"Model Name: %s", "ชื่อรุ่น: %s"}, {"Model ID", "เลขรุ่น (ID)"}, {"Spawn", "เสก"}, {"Could not spawn", "เสกไม่สำเร็จ"},
+    {"As driver", "เสกแล้วนั่งเป็นคนขับ"}, {"In Air", "เสกกลางอากาศ"},
+    {"In Air is for planes/helis and needs As driver", "กลางอากาศใช้กับเครื่องบิน/เฮลิคอปเตอร์ และต้องเปิดเป็นคนขับด้วย"},
+    {"Control", "ควบคุม"}, {"Seats", "ที่นั่ง"}, {"Spawn", "เสกรถ"}, {"Spawn options", "ตัวเลือกการเสก"}, {"Current vehicle", "รถปัจจุบัน"},
+    {"On foot", "เดินเท้า"}, {"Nearest: %s", "ใกล้สุด: %s"}, {"Could not spawn", "เสกไม่สำเร็จ"},
     {"Weapon", "อาวุธ"}, {"Visual", "ภาพ"}, {"Ammo", "กระสุน"}, {"Remove all weapons", "ถอดอาวุธทั้งหมด"}, {"Weapon given", "ให้อาวุธแล้ว"},
     {"Melee", "อาวุธระยะประชิด"}, {"Handguns", "ปืนพก"}, {"Shotguns", "ปืนลูกซอง"}, {"Submachine guns", "ปืนกลมือ"}, {"Rifles", "ปืนยาว"},
     {"Heavy weapons", "อาวุธหนัก"}, {"Thrown", "อาวุธขว้าง"}, {"Gear", "อุปกรณ์"},
@@ -1631,18 +1650,20 @@ static bool Section(const char* label, int expIdx, int id) {
 }
 
 // ===================================================================== Vehicle tab
-// Tools, switches, traffic density, seats, spawn by ID, and below them the one-tap list of 88 vehicles.
-// Layout and behaviour follow the original ARM menu's Vehicle page; every value shown is read through SafeMem (10 times a second).
-// ---- what the Vehicle tab shows, refreshed 10 times a second (the game is only read through SafeMem)
+// Three sub-pages: Control (fix/flip, switches, traffic), Seats, Spawn (As driver / In Air + the vehicle list).
+// Every value shown is read through SafeMem (10 times a second); nothing here touches the game directly.
+// ---- what the tab shows
 struct VehSnap {
     bool inCar, driver, hasTarget, stayBike;
     int sub, type, lock, maxPass, ref;
     short model;
+    float health;
     unsigned long long flags;
     unsigned int ent;
     char name[32];                                  // model name of the vehicle the seat buttons talk to (own or nearest)
 };
 static VehSnap g_vs;
+static int g_vehPage = 0;                           // 0 = Control, 1 = Seats, 2 = Spawn
 
 static void RefreshVeh() {
     static double next = 0.0;
@@ -1670,6 +1691,7 @@ static void RefreshVeh() {
             SafeMem::Get(v, kOffVFlags, n.flags);
             SafeMem::Get(v, kOffEntFlags, n.ent);
             SafeMem::Get(v, kOffLock, n.lock);
+            SafeMem::Get(v, kOffVHealth, n.health);
             if (g_getVehicleRef) n.ref = g_getVehicleRef(v);
         } else {
             target = NearestVehicle(ped);
@@ -1686,11 +1708,64 @@ static void RefreshVeh() {
     g_vs = n;
 }
 
-// model ID stepper: 400..611, wraps around like the original's arrow buttons
-static void StepSpawnId(int d) {
-    int id = g_spawnId + d;
-    id = 400 + (((id - 400) % 212) + 212) % 212;
-    g_spawnId = id;
+// ---- small building blocks for a tidy layout
+static void Caption(const char* text) {                 // quiet section label with a thin rule
+    const float sc = g_sc;
+    ImGui::Dummy(ImVec2(1.f, 4.f * sc));
+    const ImVec2 p = ImGui::GetCursorScreenPos();
+    const float fs = ImGui::GetFontSize() * 0.74f;
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    dl->AddText(ImGui::GetFont(), fs, p, IM_COL32(120, 160, 255, 255), text);
+    const float tw = ImGui::CalcTextSize(text).x * 0.74f;
+    const float y = p.y + fs * 0.55f;
+    const float x0 = p.x + tw + 16.f * sc, x1 = p.x + RowWidth();
+    if (x1 > x0) dl->AddLine(ImVec2(x0, y), ImVec2(x1, y), IM_COL32(60, 72, 104, 255), 1.5f * sc);
+    ImGui::Dummy(ImVec2(1.f, fs * 1.25f));
+}
+
+static int g_tileN = 0;                                  // tiles are laid out two per row; this counts them
+static void TileGrid() { g_tileN = 0; }
+// switch tile: status dot + label, green when on.  Returns true when tapped.
+static bool Tile(const char* label, int id, bool on, bool enabled = true) {
+    const float sc = g_sc, sp = ImGui::GetStyle().ItemSpacing.x;
+    const float w = (RowWidth() - sp) * 0.5f, h = 88.f * sc;
+    if (g_tileN % 2) ImGui::SameLine();
+    g_tileN++;
+    const ImVec2 p = ImGui::GetCursorScreenPos();
+    ImGui::Dummy(ImVec2(w, h));
+    const ImVec2 q(p.x + w, p.y + h);
+    if (enabled && id) Reg(p, q, id);
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    ImU32 fill = !enabled ? IM_COL32(24, 28, 40, 255) : (Pressed(id) ? kAccentCol : (on ? IM_COL32(22, 86, 60, 255) : kBtnCol));
+    dl->AddRectFilled(p, q, fill, 16.f * sc);
+    if (enabled && on) dl->AddRect(p, q, IM_COL32(60, 200, 130, 255), 16.f * sc, 0, 2.f * sc);
+    const ImU32 dot = !enabled ? IM_COL32(60, 65, 80, 255) : (on ? IM_COL32(80, 230, 150, 255) : IM_COL32(110, 116, 136, 255));
+    dl->AddCircleFilled(ImVec2(p.x + 30.f * sc, p.y + h * 0.5f), 9.f * sc, dot, 20);
+    const float fs = ImGui::GetFontSize();
+    const ImVec2 ts = ImGui::CalcTextSize(label);
+    const float maxW = w - 62.f * sc - 18.f * sc;
+    const float k = (ts.x > maxW && ts.x > 0.f) ? maxW / ts.x : 1.f;
+    dl->AddText(ImGui::GetFont(), fs * k, ImVec2(p.x + 56.f * sc, p.y + (h - ts.y * k) * 0.5f),
+                enabled ? IM_COL32(255, 255, 255, 255) : IM_COL32(120, 125, 140, 255), label);
+    return enabled && Fired(id);
+}
+
+// header card: what the player is in right now
+static void VehCard(const VehSnap& vs, bool run) {
+    const float sc = g_sc, h = 96.f * sc, w = RowWidth();
+    const ImVec2 p = ImGui::GetCursorScreenPos();
+    ImGui::Dummy(ImVec2(w, h));
+    const ImVec2 q(p.x + w, p.y + h);
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    dl->AddRectFilled(p, q, IM_COL32(18, 24, 40, 255), 18.f * sc);
+    dl->AddRectFilled(p, ImVec2(p.x + 8.f * sc, q.y), vs.inCar ? IM_COL32(80, 230, 150, 255) : IM_COL32(90, 98, 120, 255), 4.f * sc);
+    char t1[64], t2[64];
+    if (!run)            { snprintf(t1, sizeof(t1), "%s", Tr("Start playing first")); t2[0] = 0; }
+    else if (vs.inCar)   { snprintf(t1, sizeof(t1), "%s", vs.name[0] ? vs.name : Tr("Vehicle")); snprintf(t2, sizeof(t2), "%s   HP %d", vs.driver ? Tr("Driver") : Tr("Passenger"), (int)(vs.health + 0.5f)); }
+    else                 { snprintf(t1, sizeof(t1), "%s", Tr("On foot")); if (vs.hasTarget) snprintf(t2, sizeof(t2), Tr("Nearest: %s"), vs.name[0] ? vs.name : "?"); else t2[0] = 0; }
+    const float fs = ImGui::GetFontSize();
+    dl->AddText(ImVec2(p.x + 30.f * sc, p.y + (t2[0] ? 10.f : 28.f) * sc), IM_COL32(255, 255, 255, 255), t1);
+    if (t2[0]) dl->AddText(ImGui::GetFont(), fs * 0.8f, ImVec2(p.x + 30.f * sc, p.y + 52.f * sc), IM_COL32(140, 150, 175, 255), t2);
 }
 
 static void PageVehicle() {
@@ -1705,94 +1780,104 @@ static void PageVehicle() {
     const float hw = (RowWidth() - sp) * 0.5f;
     char v[96];
 
-    if (!run) ImGui::TextColored(dim, "%s", Tr("Start playing to edit these values"));
+    VehCard(vs, run);
+    {
+        const char* pages[3] = {Tr("Control"), Tr("Seats"), Tr("Spawn")};
+        const int k = ChipRow(pages, 3, 2090, g_vehPage, true);
+        if (k >= 0) g_vehPage = k;
+    }
+    ImGui::Spacing();
 
-    // ---- tools: fix, flip and the switches that are not tied to one vehicle
-    if (Section(Tr("Vehicle tools"), 25, 330)) {
-        if (Btn(Tr("Fix vehicle"), ImVec2(hw, 96.f * sc), 2100, kBtnCol, inCar)) Enqueue(aFixVeh, 0);
+    // ============================================================ Control
+    if (g_vehPage == 0) {
+        if (Btn(Tr("Fix vehicle"), ImVec2(hw, 104.f * sc), 2100, kAccentCol, inCar)) Enqueue(aFixVeh, 0);
         ImGui::SameLine();
-        if (Btn(Tr("Flip vehicle"), ImVec2(hw, 96.f * sc), 2101, kBtnCol, inCar && script)) Enqueue(aFlipVeh, 0);
+        if (Btn(Tr("Flip vehicle"), ImVec2(hw, 104.f * sc), 2101, kBtnCol, inCar && script)) Enqueue(aFlipVeh, 0);
         if (run && !inCar) ImGui::TextColored(dim, "%s", Tr("Get in a vehicle first"));
         else if (inCar && !script) ImGui::TextColored(dim, "%s", Tr("Flip needs the SAUtils mod"));
 
+        Caption(Tr("Switches"));
+        TileGrid();
         const bool nb = g_nbState == 1;
-        if (ToggleRow(Tr("No burn on flipped"), 2102, nb, run && g_nbState >= 0)) { Enqueue(aNoBurn, 0, nb ? 0.f : 1.f); g_nbState = nb ? 0 : 1; }
-        if (run && g_nbState < 0) ImGui::TextColored(dim, "%s", Tr("Not supported by this game build"));
-        if (ToggleRow(Tr("Stay on bike"), 2103, vs.stayBike, run)) { Enqueue(aStayBike, 0, vs.stayBike ? 0.f : 1.f); vs.stayBike = !vs.stayBike; }
+        if (Tile(Tr("No burn on flipped"), 2102, nb, run && g_nbState >= 0)) { Enqueue(aNoBurn, 0, nb ? 0.f : 1.f); g_nbState = nb ? 0 : 1; }
+        if (Tile(Tr("Stay on bike"), 2103, vs.stayBike, run)) { Enqueue(aStayBike, 0, vs.stayBike ? 0.f : 1.f); vs.stayBike = !vs.stayBike; }
         const bool pf = g_cheatOn && g_perfectIdx >= 0 && g_cheatOn[g_perfectIdx] != 0;
-        if (ToggleRow(Tr("Perfect handling"), 2104, pf, run && g_cheatOn && g_perfectIdx >= 0)) Enqueue(aPerfect, 0, pf ? 0.f : 1.f);
-        ImGui::Spacing();
-    }
+        if (Tile(Tr("Perfect handling"), 2104, pf, run && g_cheatOn && g_perfectIdx >= 0)) Enqueue(aPerfect, 0, pf ? 0.f : 1.f);
+        if (run && g_nbState < 0) ImGui::TextColored(dim, "%s", Tr("Not supported by this game build"));
 
-    // ---- switches for the vehicle the player drives
-    if (Section(Tr("Vehicle options"), 26, 331)) {
+        Caption(Tr("Current vehicle"));
         if (run && !inCar) ImGui::TextColored(dim, "%s", Tr("Get in a vehicle first"));
         else if (inCar && !drv) ImGui::TextColored(dim, "%s", Tr("Driver seat only"));
         const bool en = drv;
-        {   // Always Skidmarks
+        TileGrid();
+        {
             const bool on = ((vs.flags >> kVfSkid) & 1) != 0;
-            if (ToggleRow(Tr("Always Skidmarks"), 2110, on, en)) { Enqueue(aVehBit, kVfSkid, on ? 0.f : 1.f); vs.flags ^= 1ull << kVfSkid; }
+            if (Tile(Tr("Always Skidmarks"), 2110, on, en)) { Enqueue(aVehBit, kVfSkid, on ? 0.f : 1.f); vs.flags ^= 1ull << kVfSkid; }
         }
-        {   // Engine State: shown as on unless the "engine off" bit is set without the "engine on" bit (as the original does)
+        {   // shown as on unless the "engine off" bit is set without the "engine on" bit (as the original does)
             const bool b4 = ((vs.flags >> kVfEngineOn) & 1) != 0, b41 = ((vs.flags >> kVfEngineOff) & 1) != 0;
-            const bool on = !(b41 && !b4);
-            if (ToggleRow(Tr("Engine State"), 2111, on, en)) {
+            const bool on = inCar && !(b41 && !b4);
+            if (Tile(Tr("Engine State"), 2111, on, en)) {
                 Enqueue(aVehEngine, 0, on ? 0.f : 1.f);
                 vs.flags &= ~((1ull << kVfEngineOn) | (1ull << kVfEngineOff));
                 vs.flags |= on ? (1ull << kVfEngineOff) : (1ull << kVfEngineOn);
             }
         }
-        {   // No Particles
+        {
             const bool on = ((vs.flags >> kVfNoParticles) & 1) != 0;
-            if (ToggleRow(Tr("No Particles"), 2112, on, en)) { Enqueue(aVehBit, kVfNoParticles, on ? 0.f : 1.f); vs.flags ^= 1ull << kVfNoParticles; }
+            if (Tile(Tr("No Particles"), 2112, on, en)) { Enqueue(aVehBit, kVfNoParticles, on ? 0.f : 1.f); vs.flags ^= 1ull << kVfNoParticles; }
         }
-        if (inCar && vs.sub >= 0 && vs.sub <= 10 && (((1 << vs.sub) & 0x605) != 0)) {      // cars, quad bikes, bikes, bmx only
+        const bool comedy = inCar && vs.sub >= 0 && vs.sub <= 10 && (((1 << vs.sub) & 0x605) != 0);     // cars, quads, bikes, bmx
+        if (comedy) {
             const bool on = ((vs.flags >> kVfComedy) & 1) != 0;
-            if (ToggleRow(Tr("Comedy Control"), 2113, on, en)) { Enqueue(aVehBit, kVfComedy, on ? 0.f : 1.f); vs.flags ^= 1ull << kVfComedy; }
-            ImGui::TextColored(dim, "%s", Tr("Recommend to enable Stay on bike"));
+            if (Tile(Tr("Comedy Control"), 2113, on, en)) { Enqueue(aVehBit, kVfComedy, on ? 0.f : 1.f); vs.flags ^= 1ull << kVfComedy; }
         }
-        {   // HS Targetted
+        {
             const bool on = ((vs.flags >> kVfHsTarget) & 1) != 0;
-            if (ToggleRow(Tr("HS Targetted"), 2114, on, en)) { Enqueue(aVehBit, kVfHsTarget, on ? 0.f : 1.f); vs.flags ^= 1ull << kVfHsTarget; }
+            if (Tile(Tr("HS Targetted"), 2114, on, en)) { Enqueue(aVehBit, kVfHsTarget, on ? 0.f : 1.f); vs.flags ^= 1ull << kVfHsTarget; }
         }
-        {   // Invisible Car (entity flag bit 7 = visible)
-            const bool on = inCar && (vs.ent & 0x80u) == 0;
-            if (ToggleRow(Tr("Invisible Car"), 2115, on, en)) { Enqueue(aVehInvisible, 0, on ? 0.f : 1.f); vs.ent ^= 0x80u; }
+        {
+            const bool on = inCar && (vs.ent & 0x80u) == 0;                                         // entity flag bit 7 = visible
+            if (Tile(Tr("Invisible Car"), 2115, on, en)) { Enqueue(aVehInvisible, 0, on ? 0.f : 1.f); vs.ent ^= 0x80u; }
         }
-        {   // Lights State (FORCE_CAR_LIGHTS: on = 2, off = 1; the game can't be asked what it is, so the last value sent is shown)
+        {   // FORCE_CAR_LIGHTS on = 2, off = 1; the game can't be asked, so the last value sent is shown
             const bool on = inCar && g_lightsRef == vs.ref && g_lightsState == 2;
-            if (ToggleRow(Tr("Lights State"), 2116, on, en && script)) { Enqueue(aVehLights, 0, on ? 0.f : 1.f); g_lightsRef = vs.ref; g_lightsState = on ? 1 : 2; }
+            if (Tile(Tr("Lights State"), 2116, on, en && script)) { Enqueue(aVehLights, 0, on ? 0.f : 1.f); g_lightsRef = vs.ref; g_lightsState = on ? 1 : 2; }
         }
-        {   // Lock Door
+        {
             const bool on = inCar && vs.lock == 4;
-            if (ToggleRow(Tr("Lock Door"), 2117, on, en)) { Enqueue(aVehLock, 0, on ? 0.f : 1.f); vs.lock = on ? 1 : 4; }
+            if (Tile(Tr("Lock Door"), 2117, on, en)) { Enqueue(aVehLock, 0, on ? 0.f : 1.f); vs.lock = on ? 1 : 4; }
         }
-        ImGui::Spacing();
+        if (comedy) ImGui::TextColored(dim, "%s", Tr("Recommend to enable Stay on bike"));
+
+        Caption(Tr("Traffic"));
+        {
+            float d = 1.f;
+            const bool sym = DensitySymbolOk(&d);
+            if (!sym) d = g_densityShown;
+            const bool ok = run && (sym || HaveScript());
+            snprintf(v, sizeof(v), ok ? "%.1f" : "-", d);
+            static const char* const kPre[4] = {"0", "1", "2", "5"};
+            const int r = Stepper(Tr("Vehicle Density Multiplier"), 2120, v, "0.1", "1", kPre, 4, ok);
+            if (r == -2) Enqueue(aDensity, 0, d - 1.f); else if (r == -1) Enqueue(aDensity, 0, d - 0.1f);
+            else if (r == 1) Enqueue(aDensity, 0, d + 0.1f); else if (r == 2) Enqueue(aDensity, 0, d + 1.f);
+            else if (r >= 10) { static const float pv[4] = {0.f, 1.f, 2.f, 5.f}; Enqueue(aDensity, 0, pv[r - 10]); }
+            if (run && !ok) ImGui::TextColored(dim, "%s", Tr("Needs the SAUtils mod"));
+        }
     }
 
-    // ---- traffic
-    if (Section(Tr("Traffic"), 27, 332)) {
-        float d = 1.f;
-        const bool ok = run && g_pCarDensity != nullptr && SafeMem::Get(g_pCarDensity, 0, d) && Finite(d);
-        snprintf(v, sizeof(v), ok ? "%.1f" : "-", d);
-        static const char* const kPre[4] = {"0", "1", "2", "5"};
-        const int r = Stepper(Tr("Vehicle Density Multiplier"), 2120, v, "0.1", "1", kPre, 4, ok);
-        if (r == -2) Enqueue(aDensity, 0, d - 1.f); else if (r == -1) Enqueue(aDensity, 0, d - 0.1f);
-        else if (r == 1) Enqueue(aDensity, 0, d + 0.1f); else if (r == 2) Enqueue(aDensity, 0, d + 1.f);
-        else if (r >= 10) { static const float pv[4] = {0.f, 1.f, 2.f, 5.f}; Enqueue(aDensity, 0, pv[r - 10]); }
-        ImGui::Spacing();
-    }
-
-    // ---- seats: switch seats inside the vehicle the player sits in, or hop into the nearest one
-    if (Section(inCar ? Tr("Switch seats") : Tr("Enter near vehicle"), 28, 333)) {
+    // ============================================================ Seats
+    else if (g_vehPage == 1) {
         if (run && !vs.hasTarget) {
             ImGui::TextColored(dim, "%s", Tr("No vehicles around"));
         } else if (run) {
             const bool en = script && g_getPedRef != nullptr;
-            ImGui::TextColored(hdr, "%s", vs.name[0] ? vs.name : "?");
+            Caption(inCar ? Tr("Switch seats") : Tr("Enter near vehicle"));
             snprintf(v, sizeof(v), Tr("Seats: %d"), vs.maxPass + 1);
-            ImGui::TextColored(dim, "%s", v);
-            if (Btn(Tr("Driver"), ImVec2(hw, 96.f * sc), 2140, kBtnCol, en)) { Enqueue(aSeat, -1); Toast(Tr("Driver")); }
+            ImGui::TextColored(hdr, "%s", vs.name[0] ? vs.name : "?");
+            ImGui::SameLine();
+            ImGui::TextColored(dim, "   %s", v);
+            if (Btn(Tr("Driver"), ImVec2(hw, 96.f * sc), 2140, kAccentCol, en)) { Enqueue(aSeat, -1); Toast(Tr("Driver")); }
             for (int k = 0; k < vs.maxPass; k++) {
                 if ((k % 2) == 0) ImGui::SameLine();       // the Driver button fills the first column
                 snprintf(v, sizeof(v), "%s %d", Tr("Passenger"), k + 1);
@@ -1800,49 +1885,44 @@ static void PageVehicle() {
             }
             if (!en) ImGui::TextColored(dim, "%s", Tr("Needs the SAUtils mod"));
         }
-        ImGui::Spacing();
     }
 
-    // ---- spawn by model ID
-    if (Section(Tr("Spawn by ID"), 29, 334)) {
-        if (ToggleRow(Tr("As driver"), 2160, g_spawnAsDriver)) g_spawnAsDriver = !g_spawnAsDriver;
-        if (ToggleRow(Tr("In Air"), 2161, g_spawnInAir)) g_spawnInAir = !g_spawnInAir;
-        ImGui::TextColored(dim, "%s", Tr("For planes/helis (needs As driver)"));
-        char nm[32];
-        ModelName(g_spawnId, nm, sizeof(nm));
-        snprintf(v, sizeof(v), Tr("Model Name: %s"), nm[0] ? nm : "-");
-        ImGui::TextColored(hdr, "%s", v);
-        char num[16];
-        snprintf(num, sizeof(num), "%d", g_spawnId);
-        const int r = Stepper(Tr("Model ID"), 2180, num, "1", "10", nullptr, 0, true);
-        if (r == -2) StepSpawnId(-10); else if (r == -1) StepSpawnId(-1); else if (r == 1) StepSpawnId(1); else if (r == 2) StepSpawnId(10);
-        const bool okId = !IsTrainModel(g_spawnId);
-        if (Btn(Tr("Spawn"), ImVec2(RowWidth(), 100.f * sc), 2162, kAccentCol, script && okId && g_requestModel && g_getVehicle && g_getPedRef)) Enqueue(aSpawnId, g_spawnId);
+    // ============================================================ Spawn
+    else {
+        Caption(Tr("Spawn options"));
+        TileGrid();
+        if (Tile(Tr("As driver"), 2160, g_spawnAsDriver, script)) { g_spawnAsDriver = !g_spawnAsDriver; if (!g_spawnAsDriver) g_spawnInAir = false; }
+        if (Tile(Tr("In Air"), 2161, g_spawnInAir, script && g_spawnAsDriver)) g_spawnInAir = !g_spawnInAir;
+        ImGui::TextColored(dim, "%s", Tr("In Air is for planes/helis and needs As driver"));
         if (!script && run) ImGui::TextColored(dim, "%s", Tr("Needs the SAUtils mod"));
-        ImGui::Spacing();
-    }
 
-    // ---- the one-tap list
-    ImGui::TextColored(hdr, "%s", Tr("Vehicle list"));
-    const float colW = (RowWidth() - sp * 2.f) / 3.f;
-    const char* lastSec = nullptr;
-    int secIdx = -1, n = 0;
-    bool open = true;
-    for (int i = 0; i < kNumVeh; i++) {
-        const Veh& vh = kVeh[i];
-        if (!lastSec || strcmp(vh.section, lastSec) != 0) {
-            lastSec = vh.section; secIdx++; n = 0;
-            int count = 0; for (int j = i; j < kNumVeh && !strcmp(kVeh[j].section, vh.section); j++) count++;
-            open = g_expanded[20 + secIdx];
-            if (Header(Tr(vh.section), count, 320 + secIdx, open)) g_expanded[20 + secIdx] = !g_expanded[20 + secIdx];
+        Caption(Tr("Vehicle list"));
+        const float colW = (RowWidth() - sp * 2.f) / 3.f;
+        const char* lastSec = nullptr;
+        int secIdx = -1, n = 0;
+        bool open = true;
+        for (int i = 0; i < kNumVeh; i++) {
+            const Veh& vh = kVeh[i];
+            if (!lastSec || strcmp(vh.section, lastSec) != 0) {
+                lastSec = vh.section; secIdx++; n = 0;
+                int count = 0; for (int j = i; j < kNumVeh && !strcmp(kVeh[j].section, vh.section); j++) count++;
+                open = g_expanded[20 + secIdx];
+                if (Header(Tr(vh.section), count, 320 + secIdx, open)) g_expanded[20 + secIdx] = !g_expanded[20 + secIdx];
+            }
+            if (!open) continue;
+            if (n % 3) ImGui::SameLine();
+            if (Btn(vh.label, ImVec2(colW, 96.f * sc), 2000 + i, kBtnCol, g_vehicleCheat != nullptr || script)) {
+                if (!g_canRun) Toast(Tr("Start playing first"));
+                else {
+                    // with As driver on (or if the plain cheat is missing) the spawn recipe of the original menu is used,
+                    // otherwise the game's own vehicle cheat, as before
+                    if (script && (g_spawnAsDriver || g_vehicleCheat == nullptr)) Enqueue(aSpawnId, vh.model);
+                    else Enqueue(aVehicle, vh.model);
+                    Toast(vh.label);
+                }
+            }
+            n++;
         }
-        if (!open) continue;
-        if (n % 3) ImGui::SameLine();
-        if (Btn(vh.label, ImVec2(colW, 96.f * sc), 2000 + i, kBtnCol, g_vehicleCheat != nullptr)) {
-            if (!g_canRun) Toast(Tr("Start playing first"));
-            else { Enqueue(aVehicle, vh.model); Toast(vh.label); }
-        }
-        n++;
     }
     ImGui::Dummy(ImVec2(1.f, 90.f * sc));
 }
@@ -2082,10 +2162,11 @@ static void PageVisual() {
     static const char* const kGroups[3] = {"Vision filters", "World", "HUD"};
     for (int g = 0; g < 3; g++) {
         if (!Section(Tr(kGroups[g]), 40 + g, 390 + g)) continue;
+        TileGrid();
         for (int i = 0; i < kNumVis; i++) {
             if (kVis[i].group != g) continue;
             const bool on = (g_visCache[i] != 0) != kVis[i].invert;
-            if (ToggleRow(Tr(kVis[i].label), 1100 + i, on, g_canRun && g_visPtr[i] != nullptr)) {
+            if (Tile(Tr(kVis[i].label), 1100 + i, on, g_canRun && g_visPtr[i] != nullptr)) {
                 const unsigned char raw = VisNextRaw(on, kVis[i].invert);     // the flag value that flips the switch
                 Enqueue(aFlag, i, (float)raw);
                 g_visCache[i] = raw;
@@ -2174,7 +2255,7 @@ static void PageMenu() {
     ImGui::Spacing();
 
     ImGui::TextColored(hdr, "%s", Tr("About"));
-    ImGui::TextColored(dim, "ProMenu 0.10.0");
+    ImGui::TextColored(dim, "ProMenu 0.10.1");
     ImGui::TextColored(dim, "Radar table: %s", g_radarLayout);
     ImGui::TextColored(dim, Tr("Game state: %d    Game symbols: %d/%d"), g_dbgGameState, g_dbgFound, g_symTotal);
     ImGui::TextColored(dim, Tr("Cheat tables: %s"), CheatTablesOk() ? Tr("found") : Tr("missing"));
