@@ -49,8 +49,9 @@ static const Veh kVeh[] = {
 };
 static const int kNumVeh = (int)(sizeof(kVeh) / sizeof(kVeh[0]));
 
-enum { kTabPlayer = 0, kTabVehicle, kTabWeapon, kTabTeleport, kTabVisual, kTabGame, kTabCheats, kTabMenu, kTabCount };
-static const char* kTabs[] = {"Player", "Vehicle", "Weapon", "Teleport", "Visual", "Game", "Cheats", "Menu"};
+enum { kTabPlayer = 0, kTabPed, kTabVehicle, kTabWeapon, kTabTeleport, kTabVisual, kTabGame, kTabCheats, kTabMenu, kTabCount };
+static const char* kTabs[] = {"Player", "Ped", "Vehicle", "Weapon", "Teleport", "Visual", "Game", "Cheats", "Menu"};
+static_assert(sizeof(kTabs) / sizeof(kTabs[0]) == kTabCount, "tab names must match the tab enum");
 
 // ============================================================== game access
 typedef void (*CheatFn)();
@@ -120,10 +121,18 @@ static const VisDef kVis[] = {
     {"Show HUD",         "_ZN11CTheScripts11bDisplayHudE",          false, 2},
     {"Show Radar",       "_ZN4CHud23bScriptDontDisplayRadarE",      true,  2},   // the game flag means "hide"
     {"Grey Radar",       "_ZN11CTheScripts18bPlayerIsOffTheMapE",   false, 2},
+    {"Area name",        "_ZN4CHud26bScriptDontDisplayAreaNameE",    true,  2},   // the game flag means "hide"
+    {"Vehicle name",     "_ZN4CHud29bScriptDontDisplayVehicleNameE", true,  2},
+    // group 3 = the Ped tab (same single-byte switches, same machinery)
+    {"No random cops",        "_ZN11CPopulation23m_bDontCreateRandomCopsE",           false, 3},
+    {"No random gangs",       "_ZN11CPopulation30m_bDontCreateRandomGangMembersE",    false, 3},
+    {"Only gang members",     "_ZN11CPopulation30m_bOnlyCreateRandomGangMembersE",    false, 3},
+    {"More cars, fewer peds", "_ZN11CPopulation23m_bMoreCarsAndFewerPedsE",           false, 3},
 };
 static const int kNumVis = (int)(sizeof(kVis) / sizeof(kVis[0]));
-static unsigned char* g_visPtr[16];
-static unsigned char g_visCache[16];               // last value read (refreshed 4 times a second)
+static unsigned char* g_visPtr[24];
+static unsigned char g_visCache[24];               // last value read (refreshed 4 times a second)
+static_assert(sizeof(kVis) / sizeof(kVis[0]) <= 24, "g_visPtr / g_visCache are too small for the switch table");
 static float* g_pTimeScale = nullptr;               // CTimer::ms_fTimeScale
 static unsigned char* g_pClockH = nullptr;          // CClock::ms_nGameClockHours
 static unsigned char* g_pClockM = nullptr;          // CClock::ms_nGameClockMinutes
@@ -147,6 +156,14 @@ static void** g_modelInfoPtrs = nullptr;            // CModelInfo::ms_modelInfoP
 static float* g_pCarDensity = nullptr;              // CCarCtrl::CarDensityMultiplier
 static int g_perfectIdx = -1;                       // index of STRONGGRIP ("Perfect handling") in the cheat list
 static int g_symTotal = 0;                          // how many game symbols ResolveGame looked for
+// 0.11: player stats and pedestrians (names taken from the symbols the original ARM menu imports)
+static void  (*g_setStat)(unsigned short, float) = nullptr;   // CStats::SetStatValue(stat id, value)
+static float* g_pStatFloat = nullptr;               // CStats::StatTypesFloat (float stats 0..81, indexed by stat id)
+static float* g_pPedDensity = nullptr;              // CPopulation::PedDensityMultiplier
+static int* g_pPopTotal = nullptr;                  // CPopulation::ms_nTotalPeds
+static int* g_pPopGang = nullptr;                   // CPopulation::ms_nTotalGangPeds
+static int* g_pPopCop = nullptr;                    // CPopulation::ms_nNumCop
+static int g_bulletIdx = -1;                        // index of BULLETPROOF in the cheat list
 
 // Field offsets inside the 64-bit game structures (read from the original menu's code)
 static const int kOffHealth = 0x6AC, kOffMaxHealth = 0x6B0, kOffArmour = 0x6B4;   // CPed
@@ -214,8 +231,15 @@ static int ResolveGame(uintptr_t (*lookup)(const char*)) {
     Res(lookup, g_isPlaneModel, "_ZN10CModelInfo12IsPlaneModelEi", found);
     Res(lookup, g_modelInfoPtrs, "_ZN10CModelInfo16ms_modelInfoPtrsE", found);
     Res(lookup, g_pCarDensity, "_ZN8CCarCtrl20CarDensityMultiplierE", found);
+    Res(lookup, g_setStat, "_ZN6CStats12SetStatValueEtf", found);
+    Res(lookup, g_pStatFloat, "_ZN6CStats14StatTypesFloatE", found);
+    Res(lookup, g_pPedDensity, "_ZN11CPopulation20PedDensityMultiplierE", found);
+    Res(lookup, g_pPopTotal, "_ZN11CPopulation13ms_nTotalPedsE", found);
+    Res(lookup, g_pPopGang, "_ZN11CPopulation17ms_nTotalGangPedsE", found);
+    Res(lookup, g_pPopCop, "_ZN11CPopulation10ms_nNumCopE", found);
     for (int i = 0; i < kNumCheats; i++) if (!strcmp(kCheat[i].name, "INVINCIBILITY")) g_godIdx = i;
     for (int i = 0; i < kNumCheats; i++) if (!strcmp(kCheat[i].name, "STRONGGRIP")) g_perfectIdx = i;
+    for (int i = 0; i < kNumCheats; i++) if (!strcmp(kCheat[i].name, "BULLETPROOF")) g_bulletIdx = i;
     return found;
 }
 
@@ -741,6 +765,22 @@ static void DoDensity(float v) {
     Diag::Crumb("traffic density %.1f (%s)", v, DensitySymbolOk(nullptr) ? "variable" : "script");
 }
 
+// Pedestrian density multiplier (Ped tab): only the game variable is used, and only when it holds a sane number.
+static float g_pedDensityShown = 1.f;
+static bool PedDensityOk(float* out) {
+    float d = 0.f;
+    if (!g_pPedDensity || !SafeMem::Get(g_pPedDensity, 0, d) || !Finite(d) || d < 0.f || d > 100.f) return false;
+    if (out) *out = d;
+    return true;
+}
+static void DoPedDensity(float v) {
+    v = Clamp(v, 0.f, 10.f);
+    if (!PedDensityOk(nullptr)) return;
+    *g_pPedDensity = v;
+    g_pedDensityShown = v;
+    Diag::Crumb("ped density %.1f", v);
+}
+
 // ---- actions (all run inside the game tick; each one looks the vehicle up again instead of trusting the UI's copy)
 static void DoFixVehicle() {
     char* v = PlayerVeh(PlayerPed());
@@ -926,7 +966,7 @@ static void DoSpawnById(int model) {
 // ============================================================ action queue
 // The UI never touches the game directly; it queues actions that run inside the game's update tick.
 enum { aCheat = 0, aVehicle, aClock, aWanted, aHealth, aArmour, aMoney, aTimeScale, aClockHM, aDay, aDayLen, aWeather, aTopDown, aTopZoom, aTeleport, aGiveWeapon, aClearWeapons, aFlag, aDropWeapon, aRemoveCurrent,
-       aFixVeh, aFlipVeh, aVehBit, aVehEngine, aVehInvisible, aVehLock, aVehLights, aNoBurn, aStayBike, aPerfect, aDensity, aSeat, aSpawnId };
+       aFixVeh, aFlipVeh, aVehBit, aVehEngine, aVehInvisible, aVehLock, aVehLights, aNoBurn, aStayBike, aPerfect, aDensity, aSeat, aSpawnId, aStat, aPedDensity };
 struct Act { int kind; int i; float f; float g; };
 static const int kQueueSize = 32;
 static Act g_queue[kQueueSize];
@@ -944,17 +984,55 @@ static bool Enqueue(int kind, int i, float f = 0.f, float g = 0.f) {
 }
 
 static bool g_syncTime = false;                    // Game > Sync to system time
+static bool g_freezeTime = false, g_neverWanted = false, g_infAmmo = false;   // Game > Freeze game time, Player > Never wanted / Infinite ammo
+static bool g_frzArmed = false;                    // the frozen time has been captured
+static unsigned char g_frzH = 0, g_frzM = 0;
 static int g_lastSyncH = -1, g_lastSyncM = -1;
 
 // keeps the in-game clock equal to the phone's clock (only touches it when the real minute changes)
 static void SyncTick(bool running) {
-    if (!g_syncTime || !running || !g_setClock) return;
+    if (!g_syncTime || !running || !g_setClock || g_freezeTime) return;
     time_t t = time(nullptr);
     struct tm lt;
     localtime_r(&t, &lt);
     if (lt.tm_hour == g_lastSyncH && lt.tm_min == g_lastSyncM) return;
     g_lastSyncH = lt.tm_hour; g_lastSyncM = lt.tm_min;
     g_setClock((unsigned char)lt.tm_hour, (unsigned char)lt.tm_min, g_pCurrentDay ? *g_pCurrentDay : 0);
+}
+
+// ---- always-on switches (Player > Protection, Game > Freeze game time).  They run from the game tick.
+// weapons that really use ammo: thrown (16-18), guns and heavy weapons (22-39), spray / extinguisher / camera (41-43)
+static bool UsesAmmo(int t) { return (t >= 16 && t <= 18) || (t >= 22 && t <= 39) || (t >= 41 && t <= 43); }
+
+static void ProTick(bool running) {
+    static double next = 0.0;
+    static int n = 0;
+    if (!running) { g_frzArmed = false; return; }
+    const double t = MonoNow();
+    if (t < next) return;
+    next = t + 0.1;
+    if (g_freezeTime && g_setClock && g_pClockH && g_pClockM) {
+        if (!g_frzArmed) { g_frzH = *g_pClockH; g_frzM = *g_pClockM; g_frzArmed = true; }
+        g_setClock(g_frzH, g_frzM, g_pCurrentDay ? *g_pCurrentDay : 0);
+    } else {
+        g_frzArmed = false;
+    }
+    if ((n++ % 3) != 0) return;                    // the rest only needs ~3 runs a second
+    if (!g_neverWanted && !g_infAmmo) return;
+    char* ped = PlayerPed();
+    if (!ped || (g_pedAlive && !g_pedAlive(ped))) return;
+    if (g_neverWanted && g_cheatWanted) g_cheatWanted(ped, 0);
+    if (g_infAmmo) {
+        WpnSlot w[kWeaponSlots];
+        int active = 0;
+        if (ReadWeapons(ped, w, &active)) {
+            for (int i = 0; i < kWeaponSlots; i++) {
+                if (!UsesAmmo(w[i].type) || w[i].ammo < 1 || w[i].ammo >= 9000) continue;
+                const unsigned int full = 9999;
+                PokeMem(ped, (size_t)(kOffWeapons + i * kWeaponSize + 0xC), full);     // CWeapon::m_nTotalAmmo
+            }
+        }
+    }
 }
 
 static void RunQueued(bool gameIsRunning) {
@@ -975,7 +1053,7 @@ static void RunQueued(bool gameIsRunning) {
             case aVehicle:
                 if (g_vehicleCheat) { Diag::Crumb("spawn vehicle model %d", a.i); g_vehicleCheat(a.i); }
                 break;
-            case aClock:   if (g_setClock) g_setClock((unsigned char)a.i, 0, g_pCurrentDay ? *g_pCurrentDay : 0); break;
+            case aClock:   if (g_setClock) g_setClock((unsigned char)a.i, 0, g_pCurrentDay ? *g_pCurrentDay : 0); g_frzArmed = false; break;
             case aWanted: {
                 char* ped = PlayerPed();
                 if (ped && g_cheatWanted) g_cheatWanted(ped, a.i);
@@ -1001,6 +1079,7 @@ static void RunQueued(bool gameIsRunning) {
                 if (g_setClock) {
                     int h = ((a.i % 24) + 24) % 24, m = (((int)a.f % 60) + 60) % 60;
                     g_setClock((unsigned char)h, (unsigned char)m, g_pCurrentDay ? *g_pCurrentDay : 0);
+                    g_frzArmed = false;
                 }
                 break;
             case aDay: if (g_pCurrentDay && a.i >= 1 && a.i <= 7) *g_pCurrentDay = (unsigned char)a.i; break;
@@ -1029,12 +1108,17 @@ static void RunQueued(bool gameIsRunning) {
             case aDensity: DoDensity(a.f); break;
             case aSeat: DoSeat(a.i); break;
             case aSpawnId: DoSpawnById(a.i); break;
+            case aStat:
+                if (g_setStat && a.i >= 0 && a.i < 120) { Diag::Crumb("stat %d = %.0f", a.i, a.f); g_setStat((unsigned short)a.i, Clamp(a.f, 0.f, 10000.f)); }
+                break;
+            case aPedDensity: DoPedDensity(a.f); break;
             case aTeleport:
                 DoTeleport(a.f, a.g);
                 __atomic_store_n(&g_tpPending, 0, __ATOMIC_RELEASE);
                 break;
         }
     }
+    ProTick(gameIsRunning);
 }
 
 // =============================================================== UI state
@@ -1330,6 +1414,18 @@ static const TrPair kTr[] = {
     {"Cheat tables: %s", "ตารางสูตร: %s"}, {"found", "พบ"}, {"missing", "ไม่พบ"},
     {"Touches: %d    Taps: %d", "สัมผัส: %d    แตะ: %d"},
     {"Raw events  up: %d  down: %d  move: %d", "เหตุการณ์ดิบ  ยก: %d  กด: %d  เลื่อน: %d"},
+    // 0.11
+    {"Ped", "ผู้คน"}, {"Protection", "การป้องกัน"}, {"God mode", "อมตะ"}, {"Bulletproof", "กันกระสุน"},
+    {"Never wanted", "ตำรวจไม่ตาม"}, {"Infinite ammo", "กระสุนไม่จำกัด"},
+    {"Health, armour & money", "เลือด เกราะ และเงิน"}, {"Body stats", "ค่าสถิติร่างกาย"},
+    {"Fat", "ความอ้วน"}, {"Muscle", "กล้ามเนื้อ"}, {"Stamina", "ความทนทาน"}, {"Max health", "เลือดสูงสุด"},
+    {"Sex appeal", "เสน่ห์"}, {"Respect", "ความเคารพ"},
+    {"Pedestrians", "คนเดินถนน"}, {"Peds around: %d", "คนเดินถนนรอบตัว: %d"},
+    {"Gang members: %d    Cops: %d", "สมาชิกแก๊ง: %d    ตำรวจ: %d"},
+    {"Spawning", "การเกิดของคน"}, {"Density", "ความหนาแน่น"}, {"Pedestrian density", "ความหนาแน่นคนเดินถนน"},
+    {"No random cops", "ไม่เกิดตำรวจสุ่ม"}, {"No random gangs", "ไม่เกิดแก๊งสุ่ม"},
+    {"Only gang members", "มีแต่สมาชิกแก๊ง"}, {"More cars, fewer peds", "รถเยอะ คนน้อย"},
+    {"Area name", "ชื่อพื้นที่"}, {"Vehicle name", "ชื่อรถ"}, {"Freeze game time", "หยุดเวลาในเกม"},
 };
 // text in the current language; unknown strings fall back to English
 static const char* Tr(const char* en) {
@@ -1531,6 +1627,7 @@ static void Init(float scale) {
     g_expanded[25] = g_expanded[26] = true;                    // Vehicle: tools, options
     g_expanded[30] = g_expanded[31] = g_expanded[32] = true;   // Game: switches, speed, time
     g_expanded[36] = g_expanded[37] = true;                    // Teleport: waypoint, coordinates
+    g_expanded[52] = true;                                     // Player: health, armour & money
 }
 
 // ===================================================================== overlay
@@ -1589,56 +1686,6 @@ static const ImU32 kBtnCol = IM_COL32(40, 48, 68, 255);
 static const ImU32 kDangerCol = IM_COL32(86, 44, 52, 255);
 static const ImU32 kAccentCol = IM_COL32(52, 120, 246, 255);
 #define IM_COLOR_ARMED IM_COL32(190, 70, 40, 255)
-
-static void PagePlayer() {
-    const float sc = g_sc, sp = ImGui::GetStyle().ItemSpacing.x;
-    char* ped = g_canRun ? PlayerPed() : nullptr;
-    char* info = PlayerInfo(ped);
-    const bool ok = ped != nullptr;
-
-    // wanted level 0..6
-    ImGui::TextColored(ImVec4(0.45f, 0.62f, 1.f, 1.f), "%s", Tr("Wanted level"));
-    {
-        const float w = (RowWidth() - sp * 6.f) / 7.f;
-        for (int lv = 0; lv <= 6; lv++) {
-            if (lv) ImGui::SameLine();
-            char t[4]; snprintf(t, sizeof(t), "%d", lv);
-            if (Btn(t, ImVec2(w, 92.f * sc), 380 + lv, kBtnCol, ok && g_cheatWanted != nullptr)) { Enqueue(aWanted, lv); Toast(Tr("Wanted level set")); }
-        }
-    }
-    ImGui::Spacing();
-
-    float hp = 0.f, mx = 100.f, ar = 0.f; int money = 0;
-    if (ped) { SafeMem::Get(ped, kOffHealth, hp); SafeMem::Get(ped, kOffMaxHealth, mx); SafeMem::Get(ped, kOffArmour, ar); }
-    if (info) SafeMem::Get(info, kOffMoney, money);
-    if (mx < 100.f) mx = 100.f;
-    char v[48];
-
-    const char* const kHp[] = {Tr("Min"), Tr("Default"), Tr("Max")};
-    snprintf(v, sizeof(v), ok ? "%d / %d" : "-", (int)(hp + 0.5f), (int)(mx + 0.5f));
-    int r = Stepper(Tr("Health"), 400, v, "1", "10", kHp, 3, ok);
-    if (r == -2) Enqueue(aHealth, 0, hp - 10.f); else if (r == -1) Enqueue(aHealth, 0, hp - 1.f);
-    else if (r == 1) Enqueue(aHealth, 0, hp + 1.f); else if (r == 2) Enqueue(aHealth, 0, hp + 10.f);
-    else if (r == 10) Enqueue(aHealth, 0, 1.f); else if (r == 11) Enqueue(aHealth, 0, 100.f); else if (r == 12) Enqueue(aHealth, 0, mx);
-
-    snprintf(v, sizeof(v), ok ? "%d / 100" : "-", (int)(ar + 0.5f));
-    r = Stepper(Tr("Armour"), 430, v, "1", "10", kHp, 3, ok);
-    if (r == -2) Enqueue(aArmour, 0, ar - 10.f); else if (r == -1) Enqueue(aArmour, 0, ar - 1.f);
-    else if (r == 1) Enqueue(aArmour, 0, ar + 1.f); else if (r == 2) Enqueue(aArmour, 0, ar + 10.f);
-    else if (r == 10) Enqueue(aArmour, 0, 0.f); else if (r == 11) Enqueue(aArmour, 0, 0.f); else if (r == 12) Enqueue(aArmour, 0, 100.f);
-
-    const char* const kMoney[] = {"$0", "$10k", "$1M", Tr("Max")};
-    snprintf(v, sizeof(v), info ? "$%d" : "-", money);
-    r = Stepper(Tr("Money"), 460, v, "1k", "100k", kMoney, 4, info != nullptr);
-    const float m = (float)money;
-    if (r == -2) Enqueue(aMoney, 0, m - 100000.f); else if (r == -1) Enqueue(aMoney, 0, m - 1000.f);
-    else if (r == 1) Enqueue(aMoney, 0, m + 1000.f); else if (r == 2) Enqueue(aMoney, 0, m + 100000.f);
-    else if (r == 10) Enqueue(aMoney, 0, 0.f); else if (r == 11) Enqueue(aMoney, 0, 10000.f);
-    else if (r == 12) Enqueue(aMoney, 0, 1000000.f); else if (r == 13) Enqueue(aMoney, 0, 99999999.f);
-
-    if (!ok) ImGui::TextColored(ImVec4(0.55f, 0.60f, 0.70f, 1), "%s", Tr("Start playing to edit these values"));
-    ImGui::Dummy(ImVec2(1.f, 90.f * sc));
-}
 
 // a toggle row with an ON/OFF badge
 static bool ToggleRow(const char* label, int id, bool on, bool enabled = true) {
@@ -1779,6 +1826,131 @@ static void VehCard(const VehSnap& vs, bool run) {
     const float fs = ImGui::GetFontSize();
     dl->AddText(ImVec2(p.x + 30.f * sc, p.y + (t2[0] ? 10.f : 28.f) * sc), IM_COL32(255, 255, 255, 255), t1);
     if (t2[0]) dl->AddText(ImGui::GetFont(), fs * 0.8f, ImVec2(p.x + 30.f * sc, p.y + 52.f * sc), IM_COL32(140, 150, 175, 255), t2);
+}
+
+// "<label>: ON/OFF" toast for the switches that live in this file
+static void ToastSwitch(const char* label, bool on) {
+    char m[96];
+    snprintf(m, sizeof(m), "%s: %s", label, on ? Tr("ON") : Tr("OFF"));
+    Toast(m);
+}
+
+// header card with a coloured edge (title + a quieter second line)
+static void InfoCard(const char* t1, const char* t2, bool active) {
+    const float sc = g_sc, h = 96.f * sc, w = RowWidth();
+    const ImVec2 p = ImGui::GetCursorScreenPos();
+    ImGui::Dummy(ImVec2(w, h));
+    const ImVec2 q(p.x + w, p.y + h);
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    dl->AddRectFilled(p, q, IM_COL32(18, 24, 40, 255), 18.f * sc);
+    dl->AddRectFilled(p, ImVec2(p.x + 8.f * sc, q.y), active ? IM_COL32(80, 230, 150, 255) : IM_COL32(90, 98, 120, 255), 4.f * sc);
+    const float fs = ImGui::GetFontSize();
+    dl->AddText(ImVec2(p.x + 30.f * sc, p.y + (t2[0] ? 10.f : 28.f) * sc), IM_COL32(255, 255, 255, 255), t1);
+    if (t2[0]) dl->AddText(ImGui::GetFont(), fs * 0.8f, ImVec2(p.x + 30.f * sc, p.y + 52.f * sc), IM_COL32(140, 150, 175, 255), t2);
+}
+
+// Player > Body stats.  Stat ids of the game (float stats 0..81 live in CStats::StatTypesFloat, indexed by id).
+struct StatDef { const char* label; unsigned short id; float lo, hi; };
+static const StatDef kStat[] = {
+    {"Fat", 21, 0.f, 1000.f}, {"Muscle", 23, 0.f, 1000.f}, {"Stamina", 22, 0.f, 1000.f},
+    {"Max health", 24, 569.f, 1000.f}, {"Sex appeal", 25, 0.f, 1000.f}, {"Respect", 68, 0.f, 1000.f},
+};
+static const int kNumStat = (int)(sizeof(kStat) / sizeof(kStat[0]));
+static int g_statSel = 0;
+static bool ReadStat(int i, float* out) {
+    float v = 0.f;
+    if (!g_pStatFloat || i < 0 || i >= kNumStat || kStat[i].id >= 82) return false;
+    if (!SafeMem::Get(g_pStatFloat, (size_t)kStat[i].id * sizeof(float), v) || !Finite(v)) return false;
+    *out = v;
+    return true;
+}
+
+static void PagePlayer() {
+    const float sc = g_sc, sp = ImGui::GetStyle().ItemSpacing.x;
+    char* ped = g_canRun ? PlayerPed() : nullptr;
+    char* info = PlayerInfo(ped);
+    const bool ok = ped != nullptr;
+    char v[48];
+
+    // wanted level 0..6
+    ImGui::TextColored(ImVec4(0.45f, 0.62f, 1.f, 1.f), "%s", Tr("Wanted level"));
+    {
+        const float w = (RowWidth() - sp * 6.f) / 7.f;
+        for (int lv = 0; lv <= 6; lv++) {
+            if (lv) ImGui::SameLine();
+            char t[4]; snprintf(t, sizeof(t), "%d", lv);
+            if (Btn(t, ImVec2(w, 92.f * sc), 380 + lv, kBtnCol, ok && g_cheatWanted != nullptr)) { Enqueue(aWanted, lv); Toast(Tr("Wanted level set")); }
+        }
+    }
+
+    // quick switches
+    Caption(Tr("Protection"));
+    {
+        TileGrid();
+        const bool cheats = g_canRun && CheatTablesOk();
+        if (Tile(Tr("God mode"), 1400, g_godIdx >= 0 && StateOf(g_godIdx), cheats && g_godIdx >= 0)) OnCheatTap(g_godIdx);
+        if (Tile(Tr("Bulletproof"), 1401, g_bulletIdx >= 0 && StateOf(g_bulletIdx), cheats && g_bulletIdx >= 0)) OnCheatTap(g_bulletIdx);
+        if (Tile(Tr("Never wanted"), 1402, g_neverWanted, ok && g_cheatWanted != nullptr)) {
+            g_neverWanted = !g_neverWanted;
+            if (g_neverWanted) Enqueue(aWanted, 0);
+            ToastSwitch(Tr("Never wanted"), g_neverWanted);
+        }
+        if (Tile(Tr("Infinite ammo"), 1403, g_infAmmo, ok)) { g_infAmmo = !g_infAmmo; ToastSwitch(Tr("Infinite ammo"), g_infAmmo); }
+    }
+    ImGui::Spacing();
+
+    if (Section(Tr("Health, armour & money"), 52, 395)) {
+        float hp = 0.f, mx = 100.f, ar = 0.f; int money = 0;
+        if (ped) { SafeMem::Get(ped, kOffHealth, hp); SafeMem::Get(ped, kOffMaxHealth, mx); SafeMem::Get(ped, kOffArmour, ar); }
+        if (info) SafeMem::Get(info, kOffMoney, money);
+        if (mx < 100.f) mx = 100.f;
+
+        const char* const kHp[] = {Tr("Min"), Tr("Default"), Tr("Max")};
+        snprintf(v, sizeof(v), ok ? "%d / %d" : "-", (int)(hp + 0.5f), (int)(mx + 0.5f));
+        int r = Stepper(Tr("Health"), 400, v, "1", "10", kHp, 3, ok);
+        if (r == -2) Enqueue(aHealth, 0, hp - 10.f); else if (r == -1) Enqueue(aHealth, 0, hp - 1.f);
+        else if (r == 1) Enqueue(aHealth, 0, hp + 1.f); else if (r == 2) Enqueue(aHealth, 0, hp + 10.f);
+        else if (r == 10) Enqueue(aHealth, 0, 1.f); else if (r == 11) Enqueue(aHealth, 0, 100.f); else if (r == 12) Enqueue(aHealth, 0, mx);
+
+        snprintf(v, sizeof(v), ok ? "%d / 100" : "-", (int)(ar + 0.5f));
+        r = Stepper(Tr("Armour"), 430, v, "1", "10", kHp, 3, ok);
+        if (r == -2) Enqueue(aArmour, 0, ar - 10.f); else if (r == -1) Enqueue(aArmour, 0, ar - 1.f);
+        else if (r == 1) Enqueue(aArmour, 0, ar + 1.f); else if (r == 2) Enqueue(aArmour, 0, ar + 10.f);
+        else if (r == 10) Enqueue(aArmour, 0, 0.f); else if (r == 11) Enqueue(aArmour, 0, 0.f); else if (r == 12) Enqueue(aArmour, 0, 100.f);
+
+        const char* const kMoney[] = {"$0", "$10k", "$1M", Tr("Max")};
+        snprintf(v, sizeof(v), info ? "$%d" : "-", money);
+        r = Stepper(Tr("Money"), 460, v, "1k", "100k", kMoney, 4, info != nullptr);
+        const float m = (float)money;
+        if (r == -2) Enqueue(aMoney, 0, m - 100000.f); else if (r == -1) Enqueue(aMoney, 0, m - 1000.f);
+        else if (r == 1) Enqueue(aMoney, 0, m + 1000.f); else if (r == 2) Enqueue(aMoney, 0, m + 100000.f);
+        else if (r == 10) Enqueue(aMoney, 0, 0.f); else if (r == 11) Enqueue(aMoney, 0, 10000.f);
+        else if (r == 12) Enqueue(aMoney, 0, 1000000.f); else if (r == 13) Enqueue(aMoney, 0, 99999999.f);
+    }
+
+    if (Section(Tr("Body stats"), 53, 396)) {
+        const char* lbl[kNumStat];
+        for (int i = 0; i < kNumStat; i++) lbl[i] = Tr(kStat[i].label);
+        int k = ChipRow(lbl, 3, 1410, g_statSel, true);
+        if (k >= 0) g_statSel = k;
+        k = ChipRow(lbl + 3, 3, 1413, g_statSel - 3, true);
+        if (k >= 0) g_statSel = 3 + k;
+        const StatDef& sd = kStat[g_statSel];
+        float cur = 0.f;
+        const bool have = ReadStat(g_statSel, &cur);
+        snprintf(v, sizeof(v), have ? "%d / %d" : "-", (int)(cur + 0.5f), (int)(sd.hi + 0.5f));
+        const char* const pre[2] = {Tr("Min"), Tr("Max")};
+        const int r = Stepper(Tr(sd.label), 1420, v, "10", "100", pre, 2, ok && g_setStat != nullptr && have);
+        float nv = cur;
+        bool set = true;
+        if (r == -2) nv = cur - 100.f; else if (r == -1) nv = cur - 10.f;
+        else if (r == 1) nv = cur + 10.f; else if (r == 2) nv = cur + 100.f;
+        else if (r == 10) nv = sd.lo; else if (r == 11) nv = sd.hi; else set = false;
+        if (set) Enqueue(aStat, (int)sd.id, Clamp(nv, sd.lo, sd.hi));
+    }
+
+    if (!ok) ImGui::TextColored(ImVec4(0.55f, 0.60f, 0.70f, 1), "%s", Tr("Start playing to edit these values"));
+    ImGui::Dummy(ImVec2(1.f, 90.f * sc));
 }
 
 static void PageVehicle() {
@@ -1946,7 +2118,8 @@ static void PageGame() {
     char v[48];
 
     if (Section(Tr("Switches"), 30, 350)) {
-        if (ToggleRow(Tr("Sync to system time"), 360, g_syncTime, g_setClock != nullptr)) { g_syncTime = !g_syncTime; g_lastSyncH = -1; }
+        if (ToggleRow(Tr("Sync to system time"), 360, g_syncTime, g_setClock != nullptr)) { g_syncTime = !g_syncTime; g_lastSyncH = -1; if (g_syncTime) g_freezeTime = false; }
+        if (ToggleRow(Tr("Freeze game time"), 362, g_freezeTime, run && g_setClock != nullptr && g_pClockH != nullptr && g_pClockM != nullptr)) { g_freezeTime = !g_freezeTime; if (g_freezeTime) g_syncTime = false; g_frzArmed = false; }
         ImGui::Spacing();
     }
 
@@ -2169,25 +2342,82 @@ static void RefreshVis() {
     for (int i = 0; i < kNumVis; i++) { unsigned char b = 0; if (g_visPtr[i] && SafeMem::Get(g_visPtr[i], 0, b)) g_visCache[i] = b; }
 }
 
+// the tiles of one switch group (kVis[].group)
+static void VisTiles(int group) {
+    TileGrid();
+    for (int i = 0; i < kNumVis; i++) {
+        if (kVis[i].group != group) continue;
+        const bool on = (g_visCache[i] != 0) != kVis[i].invert;
+        if (Tile(Tr(kVis[i].label), 1100 + i, on, g_canRun && g_visPtr[i] != nullptr)) {
+            const unsigned char raw = VisNextRaw(on, kVis[i].invert);     // the flag value that flips the switch
+            Enqueue(aFlag, i, (float)raw);
+            g_visCache[i] = raw;
+        }
+    }
+}
+
 static void PageVisual() {
     const float sc = g_sc;
     RefreshVis();
     static const char* const kGroups[3] = {"Vision filters", "World", "HUD"};
     for (int g = 0; g < 3; g++) {
         if (!Section(Tr(kGroups[g]), 40 + g, 390 + g)) continue;
-        TileGrid();
-        for (int i = 0; i < kNumVis; i++) {
-            if (kVis[i].group != g) continue;
-            const bool on = (g_visCache[i] != 0) != kVis[i].invert;
-            if (Tile(Tr(kVis[i].label), 1100 + i, on, g_canRun && g_visPtr[i] != nullptr)) {
-                const unsigned char raw = VisNextRaw(on, kVis[i].invert);     // the flag value that flips the switch
-                Enqueue(aFlag, i, (float)raw);
-                g_visCache[i] = raw;
-            }
-        }
+        VisTiles(g);
         ImGui::Spacing();
     }
     if (!g_canRun) ImGui::TextColored(ImVec4(0.55f, 0.60f, 0.70f, 1), "%s", Tr("Start playing to edit these values"));
+    ImGui::Dummy(ImVec2(1.f, 90.f * sc));
+}
+
+// ===================================================================== Ped tab
+static int g_popN[3] = {-1, -1, -1};               // peds / gang peds / cops now alive around the player (-1 = unknown)
+static void RefreshPed() {
+    static double next = 0.0;
+    const double t = MonoNow();
+    if (t < next) return;
+    next = t + 0.25;
+    int* const src[3] = {g_pPopTotal, g_pPopGang, g_pPopCop};
+    for (int i = 0; i < 3; i++) {
+        int n = -1;
+        if (src[i] && SafeMem::Get(src[i], 0, n) && n >= 0 && n < 2000) g_popN[i] = n; else g_popN[i] = -1;
+    }
+}
+
+static void PagePed() {
+    const float sc = g_sc;
+    const bool run = g_canRun;
+    RefreshPed();
+    RefreshVis();
+    char t1[96], t2[96];
+    t2[0] = 0;
+    const bool known = run && g_popN[0] >= 0;
+    if (!run) snprintf(t1, sizeof(t1), "%s", Tr("Start playing first"));
+    else if (!known) snprintf(t1, sizeof(t1), "%s", Tr("Pedestrians"));
+    else {
+        snprintf(t1, sizeof(t1), Tr("Peds around: %d"), g_popN[0]);
+        snprintf(t2, sizeof(t2), Tr("Gang members: %d    Cops: %d"), g_popN[1] < 0 ? 0 : g_popN[1], g_popN[2] < 0 ? 0 : g_popN[2]);
+    }
+    InfoCard(t1, t2, known);
+
+    Caption(Tr("Spawning"));
+    VisTiles(3);
+    ImGui::Spacing();
+
+    Caption(Tr("Density"));
+    {
+        float d = 1.f;
+        const bool sym = PedDensityOk(&d);
+        if (!sym) d = g_pedDensityShown;
+        const bool ok = run && sym;
+        char v[32];
+        snprintf(v, sizeof(v), ok ? "%.1f" : "-", d);
+        static const char* const kPre[4] = {"0", "1", "2", "5"};
+        const int r = Stepper(Tr("Pedestrian density"), 1500, v, "0.1", "1", kPre, 4, ok);
+        if (r == -2) Enqueue(aPedDensity, 0, d - 1.f); else if (r == -1) Enqueue(aPedDensity, 0, d - 0.1f);
+        else if (r == 1) Enqueue(aPedDensity, 0, d + 0.1f); else if (r == 2) Enqueue(aPedDensity, 0, d + 1.f);
+        else if (r >= 10) { static const float pv[4] = {0.f, 1.f, 2.f, 5.f}; Enqueue(aPedDensity, 0, pv[r - 10]); }
+    }
+    if (!run) ImGui::TextColored(ImVec4(0.55f, 0.60f, 0.70f, 1), "%s", Tr("Start playing to edit these values"));
     ImGui::Dummy(ImVec2(1.f, 90.f * sc));
 }
 
@@ -2268,7 +2498,7 @@ static void PageMenu() {
     ImGui::Spacing();
 
     ImGui::TextColored(hdr, "%s", Tr("About"));
-    ImGui::TextColored(dim, "ProMenu 0.10.2");
+    ImGui::TextColored(dim, "ProMenu 0.11.0");
     ImGui::TextColored(dim, "Radar table: %s", g_radarLayout);
     ImGui::TextColored(dim, Tr("Game state: %d    Game symbols: %d/%d"), g_dbgGameState, g_dbgFound, g_symTotal);
     ImGui::TextColored(dim, Tr("Cheat tables: %s"), CheatTablesOk() ? Tr("found") : Tr("missing"));
@@ -2379,7 +2609,7 @@ static void Draw(float W, float H, float dt) {
     ImGui::Begin("##panel", nullptr, panelFlags);
 
     const float hh = 84.f * sc;                      // header height
-    const float btnH = 84.f * sc;                    // sidebar button height (8 tabs must fit)
+    const float btnH = 76.f * sc;                    // sidebar button height (9 tabs must fit)
     const ImU32 kAccent = IM_COL32(52, 120, 246, 255);
 
     ImGui::SetCursorPos(ImVec2(18.f * sc, (hh - ImGui::GetFontSize()) * 0.5f));
@@ -2415,6 +2645,7 @@ static void Draw(float W, float H, float dt) {
     }
     switch (g_tab) {
         case kTabPlayer:  PagePlayer();  break;
+        case kTabPed:     PagePed();     break;
         case kTabVehicle: PageVehicle(); break;
         case kTabWeapon:  PageWeapon();  break;
         case kTabTeleport: PageTeleport(); break;

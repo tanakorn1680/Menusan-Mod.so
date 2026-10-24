@@ -30,11 +30,13 @@ jni/*.inc         ตารางสูตร 100 ตัว, หมวด, ช�
   * action ต้องหา ped/vehicle ใหม่ตอนรันเอง ห้ามเก็บพอยน์เตอร์จาก UI
   * ทุกขั้นตอนเสี่ยงใส่ Diag::Crumb(...) ก่อน
   * ปุ่ม: Btn()/ToggleRow()/Stepper()/Section()/Header() id ต้องไม่ซ้ำในหน้าเดียวกัน; g_expanded[64] เก็บสถานะพับ
-    (ใช้แล้ว: 0-11 สูตร, 20-24 รายการรถ, 25-29 Vehicle ใหม่, 30-35 Game, 36-39 Teleport, 40-42 Visual, 44-51 Weapon)
+    (ใช้แล้ว: 0-11 สูตร, 20-24 รายการรถ, 25-29 Vehicle ใหม่, 30-35 Game, 36-39 Teleport, 40-42 Visual, 44-51 Weapon, 52-53 Player; ว่าง 12-19, 43, 54-63)
+  * id ของปุ่ม (ต้องไม่ซ้ำในหน้าเดียวกัน): แถบข้าง 1-9, Player 380-386 (ระดับตำรวจ) 400/430/460 (steppers) 1400-1403 (ไทล์) 1410-1415 (ชิปสถิติ) 1420+ (stepper สถิติ) 395/396 (หัวข้อพับ),
+    Ped 1500+ (stepper ความหนาแน่น) และไทล์สวิตช์ใช้ 1100+index ใน kVis (Visual/Ped ใช้ตารางเดียวกัน), Game 360-362, Vehicle 2090-2120
   * แปลภาษา: ตาราง kTr[] (en->th) ผ่าน Tr("...") ข้อความที่ไม่มีในตารางแสดงอังกฤษ
   * config.txt: "fx fy alpha scale fade lock lang ovFlags ovPos ovColor noBurn" (ฟิลด์ท้ายสุดเพิ่มใน 0.10.0 ไฟล์เก่าอ่านได้)
 
-4. สถานะ ณ ตอนนี้ (v0.10.1)
+4. สถานะ ณ ตอนนี้ (v0.11.0; รายละเอียดรอบล่าสุดอยู่ข้อ 10)
 ---------------------------
 เสร็จแล้ว: Player(เลือด/เกราะ/เงิน/wanted), Vehicle(เต็ม), Weapon, Teleport, Visual(9 สวิตช์), Game, Cheats 100, Menu(ภาษา/overlay)
 Vehicle 0.10.0 (ครบตามรายการที่ผู้ใช้ขอ):
@@ -94,3 +96,35 @@ Perfect handling = m_aCheatsActive[ดัชนี STRONGGRIP=35] ; Stay on bike
 - แก้แล้ว: GetHeading/SetHeading, GetModelInfo, CPed::IsAlive, CStreaming::LoadScene*(ERK7CVector)
 - ยังไม่อยู่ใน libGTASA (ปกติ): TopDownCamera::* (มาจากปลั๊กอินอื่น), SAUtils ScriptCommand
 - ยังไม่ทราบสาเหตุที่ Vehicle Density Multiplier กดไม่ได้ symbol `_ZN8CCarCtrl20CarDensityMultiplierE` มีจริงใน dump (0x85ebf4) ปัญหาน่าจะอยู่ที่การอ่านค่า/UI ให้ดู crumb "traffic density" ใน last_action.txt
+
+10. รอบ 0.11.0 (ผู้ใช้สั่ง: "ให้ promenu มีฟังก์ชันทั้งหมดเหมือน cheat menu แต่ใช้สะดวก ไม่รก ดูมืออาชีพ")
+------------------------------------------------------------------------------------------------------
+ทำแล้วในรอบนี้ (ไฟล์ที่แก้: jni/ui.h, README.md, PROGRESS_HANDOFF.txt):
+- แท็บใหม่ Ped (kTabPed, แทรกหลัง Player) -> PagePed(): InfoCard + VisTiles(3) + stepper ความหนาแน่น
+- Player ใหม่: ไทล์ God mode / Bulletproof (ผ่าน OnCheatTap ใช้ตารางสูตร) / Never wanted / Infinite ammo (ProTick) + Section พับได้ 2 อัน
+- Body stats: kStat[] (id สถิติ), ReadStat() อ่าน CStats::StatTypesFloat ผ่าน SafeMem, เขียนผ่านคิว aStat -> CStats::SetStatValue
+- Game: Freeze game time (g_freezeTime, ProTick เรียก SetGameClock ซ้ำ; aClock/aClockHM ตั้ง g_frzArmed=false เพื่อจับเวลาใหม่; SyncTick หยุดทำงานตอนหยุดเวลา)
+- kVis ขยายเป็น 15 ตัว (group 3 = Ped; group 2 เพิ่ม Area name / Vehicle name), g_visPtr/g_visCache เป็น 24 ช่อง (มี static_assert)
+- ProTick(running) เรียกท้าย RunQueued ทุกเกมทิก; ภายในจำกัดความถี่เอง (0.1 วินาที, ส่วนตำรวจ/กระสุนทุก 3 รอบของนั้น)
+- symbol ใหม่ทั้ง 12 ตัวถูกตรวจแล้วว่ามีในตาราง string ของ libCheatMenu64.so: CStats::SetStatValue, CStats::StatTypesFloat, CPopulation::PedDensityMultiplier,
+  ms_nTotalPeds, ms_nTotalGangPeds, ms_nNumCop, m_bDontCreateRandomCops, m_bDontCreateRandomGangMembers, m_bOnlyCreateRandomGangMembers,
+  m_bMoreCarsAndFewerPeds, CHud::bScriptDontDisplayAreaName, CHud::bScriptDontDisplayVehicleName
+ข้อสมมติที่ยังไม่ยืนยันในเกมจริง (ถ้าผู้ใช้รายงานว่าไม่ทำงาน ให้ดูตรงนี้ก่อน):
+- รหัสสถิติ 21/22/23/24/25/68 มาจากความจำเรื่อง enum eStats ของ GTA SA ไม่ได้ถอดจากเมนูเดิม (เมนูเดิมมีคีย์ StatFat/StatMuscle/StatStamina/StatHealth/StatRespect/StatEnergy/StatLung แต่รหัสตัวเลขไม่อยู่ในไฟล์ dump)
+- ว่า symbol CStats::StatTypesFloat คือตัวอาร์เรย์เองและสถิติ <82 ถูกจัดเก็บเรียงตามรหัส
+- ว่าแฟลก CPopulation/CHud ข้างต้นเป็น bool 1 ไบต์ (ระบบ aFlag เขียนไบต์เดียว)
+- Infinite ammo ใช้ออฟเซ็ตเดิมของ ReadWeapons (+0x730 + slot*0x20, ammo ที่ +0xC)
+เครื่องมือตรวจในแซนด์บ็อกซ์ (ไม่อยู่ใน repo): ทำ imgui.h จำลองเล็ก ๆ (ImVec2/ImVec4/ImDrawList/ImGui::* ที่ ui.h เรียก) + mod/logger.h + struct IAML จำลอง
+  แล้ว g++ -std=c++17 -fsyntax-only -I<stub> -I jni test.cpp ; และเขียนชุดทดสอบที่ใส่ g_findPlayerPed/g_setClock ปลอมชี้บัฟเฟอร์ในหน่วยความจำ
+  ลิงก์ด้วย -Wl,--unresolved-symbols=ignore-all เพื่อทดสอบ ProTick/ReadStat/DoPedDensity บนเครื่องได้
+
+แผนที่ฟังก์ชันของเมนู ARM เดิมที่ยังไม่มีใน ProMenu (ถอดจากคีย์/สตริงใน libCheatMenu64.so; ใช้เป็นคิวงานรอบถัดไป):
+- Player: Appearance (PedSkinTab/CustomSkinTab/AimSkinChanger, BodyFat/Muscle/Skinny/ChangeToCJ, ThinBody, LongNeck), Style (StyleFight/StyleWalkSet),
+  Invisible, MoveAim/MoveFire, Jetpack (มีเป็นสูตรแล้ว), CopyPlayerCoord, UnlockAllCity, สถิติ Energy/Lung (ต้องหารหัสสถิติ), NoHungry
+- Ped: เสกคน (SpawnTab/ModelList), งานของคน (TaskTab: รายการ task ยาวมาก เช่น Go to point, Kill ped, Car drive ...), Overlay PedTasks
+- Animation (AnimationTab/AnimSpeed), Particle (ParticleTab), Music (ต้องมี BASSMod), Free cam (FreeCamTab/FreeCamFOV/FreeCamInfo)
+- Scene: Cutscene (CutsceneTab/CutsceneStop; ใช้ CCutsceneMgr::LoadCutsceneData/StartCutscene/ms_running/ms_wasCutsceneSkipped) -- เสี่ยงเด้ง ต้องระวังมาก
+- Game: Gravity (ยังไม่พบ symbol; ต้องหา), CameraZoomLock/CameraZoom, FreezeMissionTimer (OddJob2Timer, TimerCounterHideState), SolidWater/InvisibleWater (ต้อง hook),
+  WeatherLock + SetWeatherID แบบเต็ม, WaterFogAlpha, LowClouds, SkyTop/SkyBottom, Timecyc editor (TimecycTab/Timecyc24h/ReloadTimecyc), LightShadowStrength, GrainEffect
+- Weapon: RapidFire, NoCensorship (ตอนนี้มี Infinite ammo แล้ว), Vehicle: VehComp (ชิ้นส่วนรถ), VehSet/VehSetSpeed/VehLockSpeed, RemoveVehInRadius, Spwn RndmTunes
+- Menu: SaveGame/SaveSlot, Overlay เพิ่ม (OverlayLocName, OverlayMI, OverlayRAMUsage, OverlayLockPos), ThemeStyle/TransparentMenu/LockWindow, Settings
